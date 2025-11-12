@@ -371,7 +371,7 @@ This structure enables:
 **Disk Performance:**
 - `get_etcd_disk_wal_fsync` - WAL fsync P99 latency (critical metric)
 - `get_etcd_disk_backend_commit` - Backend commit P99 latency
-- `get_etcd_disk_io` - Disk throughput, IOPS, device statistics
+- `get_node_disk_io` - Disk throughput, IOPS, device statistics
 - `get_etcd_disk_compact_defrag` - Compaction and defrag performance
 
 **Network Performance:**
@@ -1199,7 +1199,7 @@ Returns:
   duration: str
 ```
 
-**`get_etcd_disk_io(duration: str = "1h")`**
+**`get_node_disk_io(duration: str = "1h")`**
 ```python
 Parameters:
   duration: str

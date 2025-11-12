@@ -2,6 +2,26 @@
 """
 OpenShift etcd Analyzer MCP Server
 Main server implementation using FastMCP
+
+Modular Architecture:
+- etcd_analyzer_mcp_server.py (this file) - Main server and initialization
+- mcp_tools/ - Individual tool implementations
+  ├── __init__.py
+  ├── models.py - Pydantic models
+  ├── utils.py - Common utilities
+  ├── health_check.py - Health status
+  ├── cluster_info.py - OCP cluster info
+  ├── cluster_status.py - etcd cluster status
+  ├── node_usage.py - Node resource metrics
+  ├── general_info.py - General etcd metrics
+  ├── compact_defrag.py - Compaction/defrag metrics
+  ├── wal_fsync.py - WAL fsync metrics
+  ├── backend_commit.py - Backend commit metrics
+  ├── network_io.py - Network I/O metrics
+  ├── disk_io.py - Disk I/O metrics
+  ├── etcd_performance_deep_drive.py - Deep drive analysis
+  ├── bottleneck_analysis.py - Bottleneck detection
+  └── etcd_performance_report.py - Performance reporting
 """
 
 import os
@@ -11,7 +31,6 @@ import logging
 import warnings
 import subprocess
 import shutil
-from typing import Any, Dict, Optional, List
 from datetime import datetime
 import pytz
 
@@ -34,201 +53,39 @@ warnings.filterwarnings(
     message=r"HTTPResponse\.getheaders\(\) is deprecated"
 )
 
-# Ensure project root is on sys.path
+# Ensure project root and mcp directory are on sys.path
 try:
     CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-    PROJECT_ROOT = os.path.dirname(os.path.dirname(CURRENT_DIR))
+    MCP_DIR = os.path.dirname(CURRENT_DIR)  # mcp/ directory
+    PROJECT_ROOT = os.path.dirname(MCP_DIR)  # Project root
     if PROJECT_ROOT not in sys.path:
         sys.path.append(PROJECT_ROOT)
+    if MCP_DIR not in sys.path:
+        sys.path.append(MCP_DIR)
 except Exception:
     pass
 
 try:
     from fastmcp import FastMCP
-    from pydantic import BaseModel, Field, ConfigDict
     import uvicorn
 except ImportError as e:
     logger.error(f"Required dependencies not installed: {e}")
-    logger.error("Please install: pip install fastmcp>=1.12.4 pydantic uvicorn")
+    logger.error("Please install: pip install fastmcp>=1.12.4 uvicorn")
     sys.exit(1)
 
 # Import our modules
 try:
     from ocauth.openshift_auth import OpenShiftAuth
-    from tools.etcd.etcd_cluster_status import ClusterStatCollector
-    from tools.etcd.etcd_general_info import GeneralInfoCollector
-    from tools.etcd.etcd_disk_compact_defrag import CompactDefragCollector
-    from tools.etcd.etcd_disk_wal_fsync import DiskWALFsyncCollector
-    from tools.etcd.etcd_disk_backend_commit import DiskBackendCommitCollector
-    from tools.net.network_io import NetworkIOCollector
-    from tools.disk.disk_io import DiskIOCollector
-    from tools.ocp.cluster_info import ClusterInfoCollector
-    from tools.node.node_usage import nodeUsageCollector
     from config.metrics_config_reader import Config
 except ImportError as e:
     logger.error(f"Failed to import local modules: {e}")
     logger.error("Please ensure all modules are in the correct directory structure")
     sys.exit(1)
 
-
-# Pydantic models (keeping all existing models)
-class MCPBaseModel(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
-
-class DurationInput(MCPBaseModel):
-    duration: str = Field(default="1h", description="Time duration for metrics collection")
-
-class NetworkIORequest(MCPBaseModel):
-    duration: str = Field(default="5m", description="Time duration for metrics collection")
-    start_time: Optional[str] = Field(default=None, description="Start time in ISO format")
-    end_time: Optional[str] = Field(default=None, description="End time in ISO format")
-    include_metrics: Optional[List[str]] = Field(default=None, description="Filter specific metrics")
-    node_groups: Optional[List[str]] = Field(default=None, description="Filter by node groups")
-
-class NetworkMetricsResponse(MCPBaseModel):
-    status: str
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    timestamp: str
-    category: Optional[str] = None
-    duration: Optional[str] = None
-    
-class ETCDClusterStatusResponse(MCPBaseModel):
-    status: str
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    timestamp: str
-
-class ETCDMetricsResponse(MCPBaseModel):
-    status: str
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    timestamp: str
-    category: Optional[str] = None
-    duration: Optional[str] = None
-
-class ETCDNodeUsageResponse(MCPBaseModel):
-    status: str
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    timestamp: str
-    category: str = Field(default="node_usage")
-    duration: str
-
-class ETCDGeneralInfoResponse(MCPBaseModel):
-    status: str
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    timestamp: str
-    category: str = Field(default="general_info")
-    duration: str
-
-class ETCDCompactDefragResponse(MCPBaseModel):
-    status: str
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    timestamp: str
-    category: str = Field(default="disk_compact_defrag")
-    duration: str
-
-class ETCDWALFsyncResponse(MCPBaseModel):
-    status: str
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    timestamp: str
-    category: str = Field(default="disk_wal_fsync")
-    duration: str
-
-class ETCDBackendCommitResponse(MCPBaseModel):
-    status: str
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    timestamp: str
-    category: str = Field(default="disk_backend_commit")
-    duration: str
-
-class ETCDDiskIOResponse(MCPBaseModel):
-    status: str
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    timestamp: str
-    category: str = Field(default="disk_io")
-    duration: str
-
-class OCPClusterInfoResponse(MCPBaseModel):
-    status: str
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    timestamp: str
-
-class ServerHealthResponse(MCPBaseModel):
-    status: str
-    timestamp: str
-    collectors_initialized: bool
-    details: Dict[str, bool]
-
-class ETCDPerformanceDeepDriveResponse(MCPBaseModel):
-    status: str
-    data: Optional[Dict[str, Any]] = None
-    analysis: Optional[Dict[str, Any]] = None
-    summary: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    timestamp: str
-    category: str = Field(default="performance_deep_drive")
-    duration: str
-    test_id: Optional[str] = None
-
-class DeepDriveInput(MCPBaseModel):
-    duration: Optional[str] = Field(default="1h", description="Time range for metrics collection")
-
-class ETCDBottleneckAnalysisResponse(MCPBaseModel):
-    status: str
-    bottleneck_analysis: Optional[Dict[str, Any]] = None
-    root_cause_analysis: Optional[List[Dict[str, Any]]] = None
-    performance_recommendations: Optional[List[Dict[str, Any]]] = None
-    error: Optional[str] = None
-    timestamp: str
-    duration: str
-    test_id: Optional[str] = None
-
-class ETCDPerformanceReportResponse(MCPBaseModel):
-    status: str
-    analysis_results: Optional[Dict[str, Any]] = None
-    performance_report: Optional[str] = None
-    error: Optional[str] = None
-    timestamp: str
-    duration: str
-    test_id: Optional[str] = None
-
-class PerformanceReportInput(MCPBaseModel):
-    duration: Optional[str] = Field(default="1h", description="Time range for metrics collection")
-    test_id: Optional[str] = Field(default=None, description="Optional test identifier")
-
-# Helper function
-def _duration_from_time_range(start_time_iso: Optional[str], end_time_iso: Optional[str]) -> Optional[str]:
-    """Convert ISO start/end times into a duration string"""
-    try:
-        if not start_time_iso or not end_time_iso:
-            return None
-        start_dt = datetime.fromisoformat(start_time_iso.replace("Z", "+00:00"))
-        end_dt = datetime.fromisoformat(end_time_iso.replace("Z", "+00:00"))
-        if end_dt <= start_dt:
-            return None
-        total_seconds = int((end_dt - start_dt).total_seconds())
-        hours = total_seconds // 3600
-        minutes = (total_seconds % 3600) // 60
-        if hours > 0 and minutes > 0:
-            return f"{hours}h{minutes}m"
-        if hours > 0:
-            return f"{hours}h"
-        if minutes > 0:
-            return f"{minutes}m"
-        return "1m"
-    except Exception:
-        return None
-
 # Initialize MCP server
 mcp = FastMCP("OpenShift etcd Analyzer")
+
+# ==================== Global Components ====================
 
 # Global variables for collectors
 auth_manager = None
@@ -243,6 +100,8 @@ disk_io_collector = None
 cluster_info_collector = None
 node_usage_collector = None
 
+# ==================== Initialization ====================
+
 async def initialize_collectors():
     """Initialize all collectors with authentication - each loads its own metrics"""
     global auth_manager, config, cluster_collector, general_collector, compact_defrag_collector
@@ -254,12 +113,12 @@ async def initialize_collectors():
         logger.info("Initializing OpenShift etcd Analyzer components...")
         logger.info("="*70)
         
-        # Initialize global config for shared access using metrics-etcd.yml only                
+        # Initialize global config for shared access
         config = Config()
         metrics_etcd_file = os.path.join(PROJECT_ROOT, 'config', 'metrics-etcd.yml')
         metrics_disk_file = os.path.join(PROJECT_ROOT, 'config', 'metrics-disk.yml')
         
-        # Initialize OpenShift authentication (use kubeconfig from config if provided)
+        # Initialize OpenShift authentication
         logger.info("🔗 Initializing OpenShift authentication...")
         auth_manager = OpenShiftAuth(config.kubeconfig_path)
         await auth_manager.initialize()
@@ -269,6 +128,17 @@ async def initialize_collectors():
         # Initialize collectors - each will load and log their own category metrics
         logger.info("📊 Initializing metric collectors...")
         logger.info("-" * 70)
+        
+        # Import collector modules
+        from tools.etcd.etcd_cluster_status import ClusterStatCollector
+        from tools.etcd.etcd_general_info import GeneralInfoCollector
+        from tools.etcd.etcd_disk_compact_defrag import CompactDefragCollector
+        from tools.etcd.etcd_disk_wal_fsync import DiskWALFsyncCollector
+        from tools.etcd.etcd_disk_backend_commit import DiskBackendCommitCollector
+        from tools.net.network_io import NetworkIOCollector
+        from tools.disk.disk_io import DiskIOCollector
+        from tools.ocp.cluster_info import ClusterInfoCollector
+        from tools.node.node_usage import nodeUsageCollector
         
         # Cluster Status Collector
         logger.info("Initializing ClusterStatCollector...")
@@ -294,7 +164,6 @@ async def initialize_collectors():
         logger.info("Initializing NetworkIOCollector...")
         metrics_net_file = os.path.join(PROJECT_ROOT, 'config', 'metrics-net.yml')
         network_config = Config()
-        # Load metrics file explicitly
         load_result = network_config.load_metrics_file(metrics_net_file)
         if not load_result.get('success'):
             logger.error(f"Failed to load network metrics file: {load_result.get('error', 'Unknown error')}")
@@ -322,7 +191,6 @@ async def initialize_collectors():
             'verify_ssl': False
         }
         node_usage_collector = nodeUsageCollector(auth_manager, prometheus_config)
-        # Note: nodeUsageCollector doesn't use etcd metrics, so no logging needed
         logger.info("✅ nodeUsageCollector initialized (uses node metrics)")
         
         # OCP Cluster Info Collector
@@ -344,1032 +212,56 @@ async def initialize_collectors():
         logger.error("="*70)
         return False
 
-# MCP Tool Definitions
-@mcp.tool()
-async def get_server_health() -> ServerHealthResponse:
-    """Get server health status and collector initialization status"""
-    collectors_initialized = all([
-        auth_manager is not None,
-        config is not None,
-        cluster_collector is not None,
-        general_collector is not None,
-        compact_defrag_collector is not None,
-        wal_fsync_collector is not None,
-        backend_commit_collector is not None,
-        network_collector is not None,
-        disk_io_collector is not None
-    ])
-    
-    return ServerHealthResponse(
-        status="healthy" if collectors_initialized else "unhealthy",
-        timestamp=datetime.now(pytz.UTC).isoformat(),
-        collectors_initialized=collectors_initialized,
-        details={
-            "auth_manager": auth_manager is not None,
-            "config": config is not None,
-            "cluster_collector": cluster_collector is not None,
-            "general_collector": general_collector is not None,
-            "compact_defrag_collector": compact_defrag_collector is not None,
-            "wal_fsync_collector": wal_fsync_collector is not None,
-            "backend_commit_collector": backend_commit_collector is not None,
-            "network_collector": network_collector is not None,
-            "disk_io_collector": disk_io_collector is not None,
-            "cluster_info_collector": cluster_info_collector is not None,
-            "node_usage_collector": node_usage_collector is not None
-        }
-    )
+def get_global_components():
+    """Get initialized global components"""
+    return {
+        'auth_manager': auth_manager,
+        'config': config,
+        'cluster_collector': cluster_collector,
+        'general_collector': general_collector,
+        'compact_defrag_collector': compact_defrag_collector,
+        'wal_fsync_collector': wal_fsync_collector,
+        'backend_commit_collector': backend_commit_collector,
+        'network_collector': network_collector,
+        'disk_io_collector': disk_io_collector,
+        'cluster_info_collector': cluster_info_collector,
+        'node_usage_collector': node_usage_collector
+    }
 
-@mcp.tool()
-async def get_ocp_cluster_info() -> OCPClusterInfoResponse:
-    """
-    Get comprehensive OpenShift cluster information and infrastructure details.
-    
-    Collects detailed information about the OpenShift cluster hosting the etcd cluster:
-    - Cluster identification (name, version, platform - AWS/Azure/GCP/etc.)
-    - Node information (master, infra, worker nodes with specs and status)
-    - Resource counts (namespaces, pods, services, secrets, configmaps)
-    - Network policy counts (NetworkPolicies, AdminNetworkPolicies, etc.)
-    - Network resources (EgressFirewalls, EgressIPs, UserDefinedNetworks)
-    - Cluster operator status (unavailable operators)
-    - Machine Config Pool (MCP) status
-    
-    This provides context for etcd performance by showing the cluster environment.
-    
-    Returns:
-        OCPClusterInfoResponse: Comprehensive cluster information including cluster details, node inventory, resource statistics, and operator status
-    """
-    try:
-        global cluster_info_collector, auth_manager, config
-        if cluster_info_collector is None:
-            # Prefer reusing existing auth_manager when available; otherwise pass kubeconfig path
-            try:
-                collector = ClusterInfoCollector(
-                    kubeconfig_path=(config.kubeconfig_path if config else None)
-                )
-                if auth_manager:
-                    # Reuse existing initialized auth to avoid duplicate initialization and SSL issues
-                    collector.auth_manager = auth_manager
-                    collector.k8s_client = auth_manager.kube_client
-                else:
-                    await collector.initialize()
-                cluster_info_collector = collector
-            except Exception as init_err:
-                return OCPClusterInfoResponse(
-                    status="error",
-                    error=f"Failed to initialize ClusterInfoCollector: {init_err}",
-                    timestamp=datetime.now(pytz.UTC).isoformat()
-                )
+# ==================== Import and Register MCP Tools ====================
 
-        info = await cluster_info_collector.collect_cluster_info()
-        return OCPClusterInfoResponse(
-            status="success",
-            data=cluster_info_collector.to_dict(info),
-            timestamp=datetime.now(pytz.UTC).isoformat()
-        )
-    except Exception as e:
-        logger.error(f"Error collecting OCP cluster info: {e}")
-        return OCPClusterInfoResponse(
-            status="error",
-            error=str(e),
-            timestamp=datetime.now(pytz.UTC).isoformat()
-        )
+from mcp_tools.health_check import register_health_check_tool
+from mcp_tools.cluster_info import register_cluster_info_tool
+from mcp_tools.cluster_status import register_cluster_status_tool
+from mcp_tools.node_usage import register_node_usage_tool
+from mcp_tools.general_info import register_general_info_tool
+from mcp_tools.compact_defrag import register_compact_defrag_tool
+from mcp_tools.wal_fsync import register_wal_fsync_tool
+from mcp_tools.backend_commit import register_backend_commit_tool
+from mcp_tools.network_io import register_network_io_tool
+from mcp_tools.disk_io import register_disk_io_tool
+from mcp_tools.etcd_performance_deep_drive import register_performance_deep_drive_tool
+from mcp_tools.bottleneck_analysis import register_bottleneck_analysis_tool
+from mcp_tools.etcd_performance_report import register_performance_report_tool
 
-@mcp.tool()
-async def get_etcd_node_usage(duration: str = "1h") -> ETCDNodeUsageResponse:
-    """
-    Get comprehensive node usage metrics for master nodes hosting etcd.
-    
-    Monitors resource utilization metrics at the node and cgroup level for master nodes:
-    - Node CPU usage by mode (user, system, idle, iowait, etc.)
-    - Node memory used (active memory consumption)
-    - Node memory cache and buffer (filesystem cache and buffers)
-    - Cgroup CPU usage (CPU consumption per control group)
-    - Cgroup RSS usage (Resident Set Size memory per control group)
-    
-    These metrics provide insights into:
-    - Overall master node resource utilization and capacity
-    - CPU contention and workload distribution patterns
-    - Memory pressure and caching efficiency
-    - Container-level resource consumption via cgroups
-    - Potential resource bottlenecks affecting etcd performance
-    
-    Node resource constraints can directly impact etcd cluster stability and performance.
-    High CPU usage (>80%) or memory pressure can cause etcd timeouts and degraded performance.
-    
-    Args:
-        duration: Time range for metrics collection. Examples: '15m', '30m', '1h', '2h', '6h', '12h', '1d'
-    
-    Returns:
-        ETCDNodeUsageResponse: Node usage metrics including CPU usage by mode, memory consumption, cache/buffer statistics, and cgroup-level resource utilization for all master nodes
-    """
-    try:
-        global auth_manager, node_usage_collector
-        if not node_usage_collector:
-            # Lazy initialize if startup initialization didn't complete
-            if auth_manager is None:
-                auth_manager = OpenShiftAuth(config.kubeconfig_path if config else None)
-                try:
-                    await auth_manager.initialize()
-                except Exception:
-                    return ETCDNodeUsageResponse(
-                        status="error",
-                        error="Failed to initialize OpenShift auth for node usage",
-                        timestamp=datetime.now(pytz.UTC).isoformat(),
-                        duration=duration
-                    )
-            try:
-                prometheus_config = {
-                    'url': auth_manager.prometheus_url,
-                    'token': getattr(auth_manager, 'prometheus_token', None),
-                    'verify_ssl': False
-                }
-                node_usage_collector = nodeUsageCollector(auth_manager, prometheus_config)
-            except Exception as e:
-                return ETCDNodeUsageResponse(
-                    status="error",
-                    error=f"Failed to initialize nodeUsageCollector: {e}",
-                    timestamp=datetime.now(pytz.UTC).isoformat(),
-                    duration=duration
-                )
-        
-        result = await node_usage_collector.collect_all_metrics(node_group='master', duration=duration)
-        
-        return ETCDNodeUsageResponse(
-            status=result.get('status', 'unknown'),
-            data=result,
-            error=result.get('error'),
-            timestamp=result.get('timestamp', datetime.now(pytz.UTC).isoformat()),
-            duration=duration
-        )
-        
-    except Exception as e:
-        logger.error(f"Error collecting node usage metrics: {e}")
-        return ETCDNodeUsageResponse(
-            status="error",
-            error=str(e),
-            timestamp=datetime.now(pytz.UTC).isoformat(),
-            duration=duration
-        )
+# Register all tools
+logger.info("Registering MCP tools...")
+register_health_check_tool(mcp, get_global_components)
+register_cluster_info_tool(mcp, get_global_components)
+register_cluster_status_tool(mcp, get_global_components)
+register_node_usage_tool(mcp, get_global_components)
+register_general_info_tool(mcp, get_global_components)
+register_compact_defrag_tool(mcp, get_global_components)
+register_wal_fsync_tool(mcp, get_global_components)
+register_backend_commit_tool(mcp, get_global_components)
+register_network_io_tool(mcp, get_global_components)
+register_disk_io_tool(mcp, get_global_components)
+register_performance_deep_drive_tool(mcp, get_global_components)
+register_bottleneck_analysis_tool(mcp, get_global_components)
+register_performance_report_tool(mcp, get_global_components)
+logger.info("✅ All MCP tools registered")
 
-@mcp.tool()
-async def get_etcd_cluster_status() -> ETCDClusterStatusResponse:
-    """
-    Get comprehensive etcd cluster status including health, member information, and leadership details.
-    
-    This tool provides real-time etcd cluster status by executing etcdctl commands to check:
-    - Cluster health status (healthy/degraded endpoints)
-    - Member list with active and learner members
-    - Endpoint status including leader information, database sizes, and Raft terms
-    - Leadership information and changes
-    - Basic cluster metrics
-    
-    Returns:
-        ETCDClusterStatusResponse: Complete cluster status including health, members, endpoints, leadership, and basic metrics
-    """
-    try:
-        if not cluster_collector:
-            return ETCDClusterStatusResponse(
-                status="error",
-                error="Cluster collector not initialized",
-                timestamp=datetime.now(pytz.UTC).isoformat()
-            )
-        
-        result = await cluster_collector.get_cluster_status()
-        
-        return ETCDClusterStatusResponse(
-            status=result.get('status', 'unknown'),
-            data=result.get('data'),
-            error=result.get('error'),
-            timestamp=result.get('timestamp', datetime.now(pytz.UTC).isoformat())
-        )
-        
-    except Exception as e:
-        logger.error(f"Error getting cluster status: {e}")
-        return ETCDClusterStatusResponse(
-            status="error",
-            error=str(e),
-            timestamp=datetime.now(pytz.UTC).isoformat()
-        )
-
-
-@mcp.tool()
-async def get_etcd_general_info(duration: str = "1h") -> ETCDGeneralInfoResponse:
-    """
-    Get general etcd cluster information including resource usage and operational metrics.
-    
-    Collects comprehensive etcd performance and health metrics including:
-    - CPU and memory usage patterns
-    - Database size metrics (physical and logical sizes, space utilization)
-    - Proposal metrics (commit rates, failures, pending proposals)
-    - Leadership metrics (leader changes, elections, has_leader status)
-    - Performance metrics (slow applies, read indexes, operation rates)
-    - Health metrics (heartbeat failures, total keys, compacted keys)
-    
-    Args:
-        duration: Time range for metrics collection. Examples: '15m', '30m', '1h', '2h', '6h', '12h', '1d'
-    
-    Returns:
-        ETCDGeneralInfoResponse: General cluster information including resource usage, operational performance, and health statistics
-    """
-    try:
-        if not general_collector:
-            return ETCDGeneralInfoResponse(
-                status="error",
-                error="General info collector not initialized",
-                timestamp=datetime.now(pytz.UTC).isoformat(),
-                duration=duration
-            )
-        
-        result = await general_collector.collect_metrics(duration)
-        
-        return ETCDGeneralInfoResponse(
-            status=result.get('status', 'unknown'),
-            data=result.get('data'),
-            error=result.get('error'),
-            timestamp=result.get('timestamp', datetime.now(pytz.UTC).isoformat()),
-            duration=duration
-        )
-        
-    except Exception as e:
-        logger.error(f"Error collecting general info: {e}")
-        return ETCDGeneralInfoResponse(
-            status="error",
-            error=str(e),
-            timestamp=datetime.now(pytz.UTC).isoformat(),
-            duration=duration
-        )
-
-
-@mcp.tool()
-async def get_etcd_disk_compact_defrag(duration: str = "1h") -> ETCDCompactDefragResponse:
-    """
-    Get etcd database compaction and defragmentation performance metrics.
-    
-    Monitors database maintenance operations that are critical for etcd performance:
-    - Compaction duration and rates (time spent compacting old revisions)
-    - Defragmentation duration and rates (database defragmentation operations)
-    - Page fault metrics (vmstat pgmajfault rates indicating memory pressure)
-    - Operation efficiency analysis and performance recommendations
-    
-    These metrics help identify database maintenance bottlenecks and storage performance issues.
-    
-    Args:
-        duration: Time range for metrics collection. Examples: '15m', '30m', '1h', '2h', '6h', '12h', '1d'
-    
-    Returns:
-        ETCDCompactDefragResponse: Compaction and defragmentation metrics with performance analysis and recommendations
-    """
-    try:
-        if not compact_defrag_collector:
-            return ETCDCompactDefragResponse(
-                status="error",
-                error="Compact/defrag collector not initialized",
-                timestamp=datetime.now(pytz.UTC).isoformat(),
-                duration=duration
-            )
-        
-        result = await compact_defrag_collector.collect_metrics(duration)
-        
-        return ETCDCompactDefragResponse(
-            status=result.get('status', 'unknown'),
-            data=result.get('data'),
-            error=result.get('error'),
-            timestamp=result.get('timestamp', datetime.now(pytz.UTC).isoformat()),
-            duration=duration
-        )
-        
-    except Exception as e:
-        logger.error(f"Error collecting compact/defrag metrics: {e}")
-        return ETCDCompactDefragResponse(
-            status="error",
-            error=str(e),
-            timestamp=datetime.now(pytz.UTC).isoformat(),
-            duration=duration
-        )
-
-@mcp.tool()
-async def get_etcd_disk_wal_fsync(duration: str = "1h") -> ETCDWALFsyncResponse:
-    """
-    Get etcd Write-Ahead Log (WAL) fsync performance metrics.
-    
-    Monitors WAL fsync operations that are critical for etcd data durability and write performance:
-    - WAL fsync P99 latency (99th percentile fsync duration - target <10ms for good performance)
-    - WAL fsync operation rates and counts (operations per second)
-    - WAL fsync duration sum statistics (cumulative fsync time)
-    - Cluster-wide WAL fsync performance analysis and health scoring
-    
-    WAL fsync performance directly impacts write latency. High fsync times (>100ms) indicate storage bottlenecks
-    that can cause cluster instability and performance degradation.
-    
-    Args:
-        duration: Time range for metrics collection. Examples: '15m', '30m', '1h', '2h', '6h', '12h', '1d'
-    
-    Returns:
-        ETCDWALFsyncResponse: WAL fsync performance metrics including P99 latency, operation rates, and cluster-wide analysis with storage performance recommendations
-    """
-    try:
-        global auth_manager, wal_fsync_collector
-        if not wal_fsync_collector:
-            # Lazy initialize if startup initialization didn't complete
-            if auth_manager is None:
-                auth_manager = OpenShiftAuth(config.kubeconfig_path if config else None)
-                try:
-                    await auth_manager.initialize()
-                except Exception:
-                    return ETCDWALFsyncResponse(
-                        status="error",
-                        error="Failed to initialize OpenShift auth for WAL fsync",
-                        timestamp=datetime.now(pytz.UTC).isoformat(),
-                        duration=duration
-                    )
-            try:
-                wal_fsync_collector = DiskWALFsyncCollector(auth_manager, duration)
-            except Exception as e:
-                return ETCDWALFsyncResponse(
-                    status="error",
-                    error=f"Failed to initialize DiskWALFsyncCollector: {e}",
-                    timestamp=datetime.now(pytz.UTC).isoformat(),
-                    duration=duration
-                )
-        
-        # Update duration for this collection
-        wal_fsync_collector.duration = duration
-        result = await wal_fsync_collector.collect_all_metrics()
-        
-        return ETCDWALFsyncResponse(
-            status=result.get('status', 'unknown'),
-            data=result,
-            error=result.get('error'),
-            timestamp=result.get('timestamp', datetime.now(pytz.UTC).isoformat()),
-            duration=duration
-        )
-        
-    except Exception as e:
-        logger.error(f"Error collecting WAL fsync metrics: {e}")
-        return ETCDWALFsyncResponse(
-            status="error",
-            error=str(e),
-            timestamp=datetime.now(pytz.UTC).isoformat(),
-            duration=duration
-        )
-
-
-@mcp.tool()
-async def get_etcd_disk_backend_commit(duration: str = "1h") -> ETCDBackendCommitResponse:
-    """
-    Get etcd backend commit operation performance metrics.
-    
-    Monitors backend database commit operations that handle data persistence:
-    - Backend commit duration P99 latency (99th percentile response times)
-    - Commit operation rates and counts  
-    - Commit duration statistics and efficiency analysis
-    - Performance recommendations for write optimization
-    
-    Backend commit latency affects overall write performance. High latency (>25ms) indicates storage bottlenecks.
-    
-    Args:
-        duration: Time range for metrics collection. Examples: '15m', '30m', '1h', '2h', '6h', '12h', '1d'
-    
-    Returns:
-        ETCDBackendCommitResponse: Backend commit performance metrics including P99 latency, operation throughput, and storage optimization recommendations
-    """
-    try:
-        if not backend_commit_collector:
-            return ETCDBackendCommitResponse(
-                status="error",
-                error="Backend commit collector not initialized",
-                timestamp=datetime.now(pytz.UTC).isoformat(),
-                duration=duration
-            )
-        
-        result = await backend_commit_collector.collect_metrics(duration)
-        
-        return ETCDBackendCommitResponse(
-            status=result.get('status', 'unknown'),
-            data=result.get('data'),
-            error=result.get('error'),
-            timestamp=result.get('timestamp', datetime.now(pytz.UTC).isoformat()),
-            duration=duration
-        )
-        
-    except Exception as e:
-        logger.error(f"Error collecting backend commit metrics: {e}")
-        return ETCDBackendCommitResponse(
-            status="error",
-            error=str(e),
-            timestamp=datetime.now(pytz.UTC).isoformat(),
-            duration=duration
-        )
-
-@mcp.tool()
-async def get_network_io_node(
-    duration: str = "5m",
-    start_time: Optional[str] = None,
-    end_time: Optional[str] = None,
-    include_metrics: Optional[List[str]] = None,
-    node_groups: Optional[List[str]] = None
-) -> NetworkMetricsResponse:
-    """
-    Get comprehensive cluster node level network I/O metrics and performance statistics.
-    
-    Monitors network performance metrics including:
-    - RX/TX bandwidth utilization on ocp node level(bits per second)
-    - RX/TX packet rates  on ocp node level(packets per second)
-    - Packet drops and errors on ocp node level(indicating congestion or issues)
-    - Network saturation metrics  on ocp node level(percentage of capacity)
-    - Interface status on ocp node level(up/down, carrier detection)
-    - Network speed configuration on ocp node level
-    - Connection tracking (conntrack entries and limits) on ocp node level
-    - ARP table statistics on ocp node level
-    - FIFO queue depths on ocp node level
-    
-    Metrics organized by node role with avg/max statistics.
-    Worker nodes show top 3 performers.
-    
-    USE CASES:
-    - Network bottleneck identification and saturation analysis
-    - Packet drop troubleshooting and congestion detection
-    - Connection tracking table utilization monitoring
-    - Network capacity planning for infrastructure upgrades
-    - API server network load analysis via gRPC streams
-    - Interface health and carrier status monitoring
-    - Network performance baseline establishment
-    
-    Args:
-        duration: Time range for metrics (e.g., '5m', '15m', '1h', '6h', '1d'). Default: '5m'
-        start_time: Optional start time in ISO format (YYYY-MM-DDTHH:MM:SSZ)
-        end_time: Optional end time in ISO format (YYYY-MM-DDTHH:MM:SSZ)
-        include_metrics: Optional list of specific metrics to include
-        node_groups: Optional list of node groups to filter (e.g., ['controlplane', 'worker'])
-    
-    Returns:
-        NetworkMetricsResponse: Network I/O performance metrics grouped by node role
-    """
-    try:
-        global auth_manager, network_collector, config, PROJECT_ROOT
-        
-        # Use duration from time range if provided
-        if start_time and end_time:
-            computed_duration = _duration_from_time_range(start_time, end_time)
-            if computed_duration:
-                duration = computed_duration
-        
-        if not network_collector:
-            # Lazy initialize if startup initialization didn't complete
-            if auth_manager is None:
-                if config is None:
-                    config = Config()
-                auth_manager = OpenShiftAuth(config.kubeconfig_path if config else None)
-                try:
-                    await auth_manager.initialize()
-                except Exception:
-                    return NetworkMetricsResponse(
-                        status="error",
-                        error="Failed to initialize OpenShift auth for network I/O",
-                        timestamp=datetime.now(pytz.UTC).isoformat(),
-                        category="network_io",
-                        duration=duration
-                    )
-            try:
-                metrics_net_file = os.path.join(PROJECT_ROOT, 'config', 'metrics-net.yml')
-                network_config = Config()
-                # Load metrics file explicitly
-                load_result = network_config.load_metrics_file(metrics_net_file)
-                if not load_result.get('success'):
-                    error_msg = load_result.get('error', 'Unknown error loading metrics file')
-                    logger.error(f"Failed to load metrics file: {error_msg}")
-                    return NetworkMetricsResponse(
-                        status="error",
-                        error=f"Failed to load metrics file: {error_msg}",
-                        timestamp=datetime.now(pytz.UTC).isoformat(),
-                        category="network_io",
-                        duration=duration
-                    )
-                logger.info(f"Loaded {load_result.get('metrics_loaded', 0)} metrics from {metrics_net_file}")
-                
-                network_collector = NetworkIOCollector(
-                    prometheus_url=auth_manager.prometheus_url,
-                    token=getattr(auth_manager, 'prometheus_token', None),
-                    config=network_config
-                )
-                await network_collector.initialize()
-            except Exception as e:
-                return NetworkMetricsResponse(
-                    status="error",
-                    error=f"Failed to initialize NetworkIOCollector: {e}",
-                    timestamp=datetime.now(pytz.UTC).isoformat(),
-                    category="network_io",
-                    duration=duration
-                )
-        
-        # Ensure collector is initialized
-        if not hasattr(network_collector, 'prometheus_client') or network_collector.prometheus_client is None:
-            await network_collector.initialize()
-        
-        # Check if metrics are loaded
-        if not hasattr(network_collector, 'metrics') or not network_collector.metrics:
-            logger.warning("NetworkIOCollector has no metrics loaded from config")
-            return NetworkMetricsResponse(
-                status="error",
-                error="No network metrics configured. Please check metrics-net.yml configuration.",
-                timestamp=datetime.now(pytz.UTC).isoformat(),
-                category="network_io",
-                duration=duration
-            )
-        
-        logger.info(f"Collecting network I/O metrics with {len(network_collector.metrics)} metrics configured")
-        
-        # Test Prometheus connectivity and node groups
-        try:
-            test_query = "up"
-            test_result = await network_collector.prometheus_client.query_instant(test_query)
-            if test_result and test_result.get('result'):
-                logger.info(f"Prometheus connectivity test successful: {len(test_result.get('result', []))} results")
-            else:
-                logger.warning("Prometheus connectivity test returned no results - Prometheus may be unreachable or empty")
-        except Exception as test_err:
-            logger.warning(f"Prometheus connectivity test failed: {test_err}")
-        
-        # Test node groups retrieval
-        try:
-            node_groups_test = await network_collector.utility.get_node_groups(network_collector.prometheus_client)
-            if node_groups_test:
-                total_nodes = sum(len(nodes) for nodes in node_groups_test.values())
-                logger.info(f"Node groups retrieved successfully: {total_nodes} total nodes across {len(node_groups_test)} roles")
-                for role, nodes in node_groups_test.items():
-                    logger.debug(f"  {role}: {len(nodes)} nodes")
-            else:
-                logger.warning("Node groups retrieval returned empty - this will cause all metrics to be empty")
-        except Exception as ng_err:
-            logger.warning(f"Node groups retrieval failed: {ng_err} - this will cause all metrics to be empty")
-        
-        # Use collect_all_metrics from the new module
-        network_data = await asyncio.wait_for(
-            network_collector.collect_all_metrics(duration=duration), timeout=60.0
-        )
-        
-        # Derive status from summary (new module structure)
-        status = "success"
-        error = None
-        if network_data.get('summary'):
-            summary = network_data['summary']
-            errors = summary.get('errors', 0)
-            empty = summary.get('empty', 0)
-            with_data = summary.get('with_data', 0)
-            
-            if errors > 0:
-                status = "error"
-                error = f"{errors} metric(s) failed to collect"
-            elif empty == summary.get('total_metrics', 0) and with_data == 0:
-                # All metrics are empty - this is a problem
-                status = "warning"
-                error = f"All {empty} metrics returned empty results. This may indicate: 1) Prometheus queries are not matching any data, 2) Time range has no data, 3) Metrics are not available in Prometheus, or 4) Node grouping failed. Check Prometheus connectivity and metric availability."
-                logger.warning(f"All network I/O metrics are empty. Total: {summary.get('total_metrics', 0)}, Empty: {empty}, With Data: {with_data}")
-        
-        return NetworkMetricsResponse(
-            status=status,
-            data=network_data,
-            error=error,
-            timestamp=network_data.get('timestamp', datetime.now(pytz.UTC).isoformat()),
-            category="network_io",
-            duration=duration
-        )
-        
-    except asyncio.TimeoutError:
-        return NetworkMetricsResponse(
-            status="error",
-            error="Timeout collecting network I/O metrics",
-            timestamp=datetime.now(pytz.UTC).isoformat(),
-            category="network_io",
-            duration=duration
-        )
-    except Exception as e:
-        logger.error(f"Error collecting network I/O: {e}")
-        return NetworkMetricsResponse(
-            status="error",
-            error=str(e),
-            timestamp=datetime.now(pytz.UTC).isoformat(),
-            category="network_io",
-            duration=duration
-        )
-
-
-@mcp.tool()
-async def get_etcd_disk_io(duration: str = "1h") -> ETCDDiskIOResponse:
-    """
-    Get etcd disk I/O performance metrics including throughput and IOPS.
-    
-    Monitors comprehensive disk I/O performance metrics that directly impact etcd performance:
-    - Container disk write metrics (etcd pod disk write throughput and patterns)
-    - Node disk read/write throughput (bytes per second for storage devices)  
-    - Node disk read/write IOPS (input/output operations per second)
-    - Device-level I/O statistics aggregated by master node
-    - Storage performance analysis and bottleneck identification
-    
-    Disk I/O performance is critical for etcd operations including:
-    - WAL (Write-Ahead Log) write operations
-    - Database snapshot creation and transfers
-    - Compaction and defragmentation operations
-    - Overall cluster stability and response times
-    
-    Poor disk I/O performance can cause etcd timeouts, leader elections, and cluster instability.
-    
-    Args:
-        duration: Time range for metrics collection. Examples: '15m', '30m', '1h', '2h', '6h', '12h', '1d'
-    
-    Returns:
-        ETCDDiskIOResponse: Disk I/O performance metrics including container write rates, node throughput/IOPS, device statistics, and storage optimization recommendations
-    """
-    try:
-        global auth_manager, disk_io_collector, PROJECT_ROOT
-        if not disk_io_collector:
-            # Lazy initialize if startup initialization didn't complete
-            if auth_manager is None:
-                auth_manager = OpenShiftAuth(config.kubeconfig_path if config else None)
-                try:
-                    await auth_manager.initialize()
-                except Exception:
-                    return ETCDDiskIOResponse(
-                        status="error",
-                        error="Failed to initialize OpenShift auth for disk I/O",
-                        timestamp=datetime.now(pytz.UTC).isoformat(),
-                        duration=duration
-                    )
-            try:
-                # Use metrics-disk.yml for disk I/O metrics
-                metrics_disk_file = os.path.join(PROJECT_ROOT, 'config', 'metrics-disk.yml')
-                disk_io_collector = DiskIOCollector(auth_manager, duration, metrics_file_path=metrics_disk_file)
-            except Exception as e:
-                return ETCDDiskIOResponse(
-                    status="error",
-                    error=f"Failed to initialize DiskIOCollector: {e}",
-                    timestamp=datetime.now(pytz.UTC).isoformat(),
-                    duration=duration
-                )
-        
-        # Update duration for this collection
-        disk_io_collector.duration = duration
-        result = await disk_io_collector.collect_all_metrics()
-        
-        return ETCDDiskIOResponse(
-            status=result.get('status', 'unknown'),
-            data=result,
-            error=result.get('error'),
-            timestamp=result.get('timestamp', datetime.now(pytz.UTC).isoformat()),
-            duration=duration
-        )
-        
-    except Exception as e:
-        logger.error(f"Error collecting disk I/O metrics: {e}")
-        return ETCDDiskIOResponse(
-            status="error",
-            error=str(e),
-            timestamp=datetime.now(pytz.UTC).isoformat(),
-            duration=duration
-        )
-
-@mcp.tool()
-async def get_etcd_performance_deep_drive(
-    duration: str = "1h",
-    start_time: Optional[str] = None,
-    end_time: Optional[str] = None,
-    input: DeepDriveInput | None = None,
-) -> ETCDPerformanceDeepDriveResponse:
-    """
-    Perform comprehensive etcd performance deep drive analysis across all critical subsystems.
-    
-    This tool executes an in-depth performance analysis of the etcd cluster by collecting and analyzing metrics from multiple subsystems:
-    
-    **Collected Metrics:**
-    - General cluster metrics: CPU/memory usage, proposal rates, leadership changes, operation rates
-    - WAL fsync performance: P99 latency, operation rates, duration statistics (critical for write performance)
-    - Disk I/O metrics: Container and node-level disk throughput, IOPS, device statistics
-    - Network I/O performance: Container network, peer communication, client gRPC, node utilization
-    - Backend commit operations: Database commit latency, operation rates, efficiency analysis
-    - Compact/defrag operations: Database maintenance performance, compaction duration, page faults
-    
-    **Analysis Features:**
-    - Latency pattern analysis across all subsystems
-    - Performance correlation analysis between different metrics
-    - Health scoring and performance benchmarking
-    - Automated performance summary with key findings
-    - Cross-subsystem performance impact assessment
-    
-    **Use Cases:**
-    - Comprehensive cluster health assessment
-    - Performance baseline establishment
-    - Pre/post-change performance comparison
-    - Identifying performance trends and patterns
-    - Generating detailed performance reports for stakeholders
-    
-    The analysis provides a holistic view of etcd performance, making it easier to identify performance bottlenecks and optimization opportunities across the entire cluster stack.
-    
-    Args:
-        duration: Time range for metrics collection and analysis. Examples: '15m', '30m', '1h', '2h', '6h', '12h', '1d'. Default: '1h'
-    
-    Returns:
-        ETCDPerformanceDeepDriveResponse: Comprehensive performance analysis including all subsystem metrics, latency analysis, performance summary, and actionable insights with unique test ID for tracking
-    """
-    try:
-        global auth_manager
-        if not auth_manager:
-            return ETCDPerformanceDeepDriveResponse(
-                status="error",
-                error="OpenShift authentication not initialized",
-                timestamp=datetime.now(pytz.UTC).isoformat(),
-                duration=duration if input is None or not getattr(input, "duration", None) else input.duration
-            )
-        
-        # Lazy import of analysis module
-        try:
-            from analysis.etcd.etcd_performance_deepdrive import etcdDeepDriveAnalyzer
-        except ImportError as import_err:
-            logger.error(f"Failed to import etcdDeepDriveAnalyzer: {import_err}")
-            return ETCDPerformanceDeepDriveResponse(
-                status="error",
-                error=f"Performance deep drive analysis module not available: {import_err}",
-                timestamp=datetime.now(pytz.UTC).isoformat(),
-                duration=duration if input is None or not getattr(input, "duration", None) else input.duration
-            )
-        
-        # Determine effective duration: prefer explicit input.duration, else compute from time range, else use duration arg
-        eff_duration = duration if input is None or not getattr(input, "duration", None) else input.duration
-        if start_time and end_time:
-            computed = _duration_from_time_range(start_time, end_time)
-            if computed:
-                eff_duration = computed
-        deep_drive_analyzer = etcdDeepDriveAnalyzer(auth_manager, eff_duration)
-        
-        # Perform the comprehensive analysis
-        result = await deep_drive_analyzer.analyze_performance_deep_drive()
-        
-        return ETCDPerformanceDeepDriveResponse(
-            status=result.get('status', 'unknown'),
-            data=result.get('data'),
-            analysis=result.get('analysis'),
-            summary=result.get('summary'),
-            error=result.get('error'),
-            timestamp=result.get('timestamp', datetime.now(pytz.UTC).isoformat()),
-            duration=eff_duration,
-            test_id=result.get('test_id')
-        )
-        
-    except Exception as e:
-        logger.error(f"Error performing etcd performance deep drive analysis: {e}")
-        return ETCDPerformanceDeepDriveResponse(
-            status="error",
-            error=str(e),
-            timestamp=datetime.now(pytz.UTC).isoformat(),
-            duration=duration if input is None or not getattr(input, "duration", None) else input.duration
-        )
-
-
-@mcp.tool()
-async def get_etcd_bottleneck_analysis(duration: str = "1h") -> ETCDBottleneckAnalysisResponse:
-    """
-    Perform advanced etcd performance bottleneck analysis with root cause identification and optimization recommendations.
-    
-    This tool performs sophisticated bottleneck analysis by:
-    
-    **Bottleneck Detection:**
-    - Disk I/O bottlenecks: WAL fsync high latency (>100ms P99), backend commit delays (>50ms P99), low disk throughput
-    - Network bottlenecks: High peer-to-peer latency (>100ms), network utilization (>80%), packet drops
-    - Memory bottlenecks: High memory usage (>80%), memory pressure indicators, potential memory leaks
-    - Consensus bottlenecks: Proposal failures, high pending proposals (>10), slow applies, frequent leader changes (>1/hour)
-    
-    **Analysis Methodology:**
-    - Automated threshold-based bottleneck identification with severity classification (high/medium/low)
-    - Cross-subsystem correlation analysis to identify cascading performance issues
-    - Performance impact assessment for each identified bottleneck
-    - Historical pattern analysis to distinguish temporary vs. persistent issues
-    
-    **Root Cause Analysis:**
-    - Evidence-based root cause identification linking symptoms to underlying causes
-    - Likelihood assessment for each potential root cause
-    - Impact analysis showing how bottlenecks affect cluster performance
-    - Categorization by subsystem (disk_io, network, memory, consensus)
-    
-    **Optimization Recommendations:**
-    - Prioritized recommendations based on performance impact and implementation complexity
-    - Specific actionable steps for each identified bottleneck
-    - Infrastructure optimization suggestions (storage upgrades, network improvements)
-    - Configuration tuning recommendations for etcd and OpenShift
-    
-    **Use Cases:**
-    - Performance troubleshooting and problem diagnosis
-    - Proactive performance optimization planning
-    - Infrastructure capacity planning and upgrades
-    - Performance regression analysis after changes
-    - Creating performance improvement roadmaps
-    
-    Args:
-        duration: Time range for bottleneck analysis. Examples: '15m', '30m', '1h', '2h', '6h', '12h', '1d'. Default: '1h'
-    
-    Returns:
-        ETCDBottleneckAnalysisResponse: Comprehensive bottleneck analysis including identified performance issues, root cause analysis, and prioritized optimization recommendations with unique test ID
-    """
-    try:
-        global auth_manager
-        if not auth_manager:
-            return ETCDBottleneckAnalysisResponse(
-                status="error",
-                error="OpenShift authentication not initialized",
-                timestamp=datetime.now(pytz.UTC).isoformat(),
-                duration=duration
-            )
-        
-        # Lazy import of analysis module
-        try:
-            from analysis.etcd.etcd_performance_deepdrive import etcdDeepDriveAnalyzer
-        except ImportError as import_err:
-            logger.error(f"Failed to import etcdDeepDriveAnalyzer: {import_err}")
-            return ETCDBottleneckAnalysisResponse(
-                status="error",
-                error=f"Bottleneck analysis module not available: {import_err}",
-                timestamp=datetime.now(pytz.UTC).isoformat(),
-                duration=duration
-            )
-        
-        # Initialize the deep drive analyzer
-        deep_drive_analyzer = etcdDeepDriveAnalyzer(auth_manager, duration)
-        
-        # Perform bottleneck analysis
-        result = await deep_drive_analyzer.analyze_bottlenecks()
-        
-        return ETCDBottleneckAnalysisResponse(
-            status=result.get('status', 'success'),
-            bottleneck_analysis=result.get('bottleneck_analysis'),
-            root_cause_analysis=result.get('root_cause_analysis'),
-            performance_recommendations=result.get('performance_recommendations'),
-            error=result.get('error'),
-            timestamp=result.get('timestamp', datetime.now(pytz.UTC).isoformat()),
-            duration=duration,
-            test_id=result.get('test_id')
-        )
-        
-    except Exception as e:
-        logger.error(f"Error performing etcd bottleneck analysis: {e}")
-        return ETCDBottleneckAnalysisResponse(
-            status="error",
-            error=str(e),
-            timestamp=datetime.now(pytz.UTC).isoformat(),
-            duration=duration
-        )
-
-@mcp.tool()
-async def generate_etcd_performance_report(duration: str = "1h", input: PerformanceReportInput | None = None) -> ETCDPerformanceReportResponse:
-    """
-    Generate comprehensive etcd performance analysis report with detailed metrics evaluation and recommendations.
-    
-    This tool provides enterprise-grade performance analysis and reporting for etcd clusters by:
-    
-    **Comprehensive Data Collection:**
-    - Critical performance metrics: WAL fsync P99 latency, backend commit P99 latency
-    - Supporting metrics: CPU/memory usage, network I/O, disk I/O performance
-    - Cluster health indicators: proposal rates, leadership changes, compaction metrics
-    - Infrastructure metrics: node resources, network utilization, storage performance
-    
-    **Advanced Performance Analysis:**
-    - Threshold-based analysis using etcd best practices (WAL fsync <10ms, backend commit <25ms)
-    - Baseline comparison against industry benchmarks and performance targets
-    - Health status determination with severity classification (excellent/good/warning/critical)
-    - Cross-metric correlation analysis to identify performance patterns
-    
-    **Executive Reporting:**
-    - Executive summary with overall cluster health assessment and performance grade
-    - Critical alerts section highlighting urgent performance issues requiring immediate attention
-    - Detailed metrics analysis with formatted tables showing per-pod performance
-    - Baseline comparison showing current vs. target performance with pass/fail status
-    - Prioritized recommendations categorized by priority (high/medium/low) with specific actions
-    
-    **Analysis Methodology:**
-    - Industry best practice thresholds and performance benchmarks
-    - Root cause analysis linking performance symptoms to underlying infrastructure issues
-    - Performance impact assessment and optimization recommendations
-    - Detailed methodology explanation for audit and compliance purposes
-    
-    **Report Features:**
-    - Professional formatting suitable for stakeholder presentations
-    - Unique test ID for tracking and historical comparison
-    - Timestamp and duration information for audit trails
-    - Actionable recommendations with implementation guidance
-    - Analysis rationale and methodology documentation
-    
-    **Use Cases:**
-    - Regular performance health checks and monitoring reports
-    - Pre/post-change performance impact analysis
-    - Performance troubleshooting and root cause analysis
-    - Capacity planning and infrastructure optimization
-    - Executive dashboards and stakeholder reporting
-    - Compliance documentation and performance auditing
-    
-    Args:
-        duration: Time range for metrics collection and analysis. Examples: '15m', '30m', '1h', '2h', '6h', '12h', '1d'. Default: '1h'
-        input: Optional input parameters including custom duration and test_id
-    
-    Returns:
-        ETCDPerformanceReportResponse: Comprehensive performance analysis results and formatted report including critical metrics analysis, performance summary, baseline comparison, prioritized recommendations, and executive-ready documentation
-    """
-    try:
-        global auth_manager
-        if not auth_manager:
-            return ETCDPerformanceReportResponse(
-                status="error",
-                error="OpenShift authentication not initialized",
-                timestamp=datetime.now(pytz.UTC).isoformat(),
-                duration=duration if input is None or not getattr(input, "duration", None) else input.duration
-            )
-        
-        # Lazy import of analysis modules
-        try:
-            from analysis.etcd.etcd_performance_deepdrive import etcdDeepDriveAnalyzer
-            from analysis.etcd.etcd_performance_report import etcdReportAnalyzer
-        except ImportError as import_err:
-            logger.error(f"Failed to import performance report modules: {import_err}")
-            return ETCDPerformanceReportResponse(
-                status="error",
-                error=f"Performance report analysis modules not available: {import_err}",
-                timestamp=datetime.now(pytz.UTC).isoformat(),
-                duration=duration if input is None or not getattr(input, "duration", None) else input.duration,
-                test_id=f"error-{datetime.now(pytz.UTC).strftime('%Y%m%d-%H%M%S')}"
-            )
-        
-        # Get effective parameters
-        eff_duration = duration if input is None or not getattr(input, "duration", None) else input.duration
-        test_id = None
-        if input and hasattr(input, "test_id") and input.test_id:
-            test_id = input.test_id
-        else:
-            # Generate unique test ID
-            test_id = f"perf-report-{datetime.now(pytz.UTC).strftime('%Y%m%d-%H%M%S')}"
-        
-        # Initialize the deep drive analyzer to collect metrics
-        deep_drive_analyzer = etcdDeepDriveAnalyzer(auth_manager, eff_duration)
-        
-        # Collect comprehensive metrics for analysis
-        metrics_result = await deep_drive_analyzer.analyze_performance_deep_drive()
-        
-        if metrics_result.get('status') != 'success':
-            return ETCDPerformanceReportResponse(
-                status="error",
-                error=f"Failed to collect metrics for performance report: {metrics_result.get('error', 'Unknown error')}",
-                timestamp=datetime.now(pytz.UTC).isoformat(),
-                duration=eff_duration,
-                test_id=test_id
-            )
-        
-        # Initialize the performance report analyzer
-        report_analyzer = etcdReportAnalyzer()
-
-        # Collect node usage to enrich the analysis (ensure expected schema)
-        node_usage_wrapped: Dict[str, Any] | None = None
-        try:
-            global node_usage_collector
-            if not node_usage_collector:
-                # Lazy init like get_etcd_node_usage
-                prometheus_config_local = {
-                    'url': auth_manager.prometheus_url,
-                    'token': getattr(auth_manager, 'prometheus_token', None),
-                    'verify_ssl': False,
-                }
-                node_usage_collector = nodeUsageCollector(auth_manager, prometheus_config_local)
-            node_usage_result = await node_usage_collector.collect_all_metrics(node_group='master', duration=eff_duration)
-            node_usage_wrapped = {
-                'status': node_usage_result.get('status', 'unknown'),
-                'data': node_usage_result,
-                'timestamp': node_usage_result.get('timestamp')
-            }
-        except Exception as nu_err:
-            logger.warning(f"Node usage collection failed for performance report: {nu_err}")
-            node_usage_wrapped = None
-
-        # Analyze the collected metrics (including node usage when available)
-        analysis_results = report_analyzer.analyze_performance_metrics(metrics_result, test_id, node_usage_wrapped)
-        
-        # Generate the comprehensive performance report
-        performance_report = report_analyzer.generate_performance_report(
-            analysis_results, test_id, eff_duration
-        )
-        
-        return ETCDPerformanceReportResponse(
-            status=analysis_results.get('status', 'success'),
-            analysis_results=analysis_results,
-            performance_report=performance_report,
-            error=analysis_results.get('error'),
-            timestamp=analysis_results.get('timestamp', datetime.now(pytz.UTC).isoformat()),
-            duration=eff_duration,
-            test_id=test_id
-        )
-        
-    except Exception as e:
-        logger.error(f"Error generating etcd performance report: {e}")
-        return ETCDPerformanceReportResponse(
-            status="error",
-            error=str(e),
-            timestamp=datetime.now(pytz.UTC).isoformat(),
-            duration=duration if input is None or not getattr(input, "duration", None) else input.duration,
-            test_id=f"error-{datetime.now(pytz.UTC).strftime('%Y%m%d-%H%M%S')}"
-        )
+# ==================== Startup and Main ====================
 
 async def startup_event():
     """Startup event handler"""

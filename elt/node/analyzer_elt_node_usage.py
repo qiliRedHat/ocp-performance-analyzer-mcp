@@ -95,6 +95,9 @@ class nodeUsageELT(utilityELT):
                 nodes_list = group_data.get('nodes', [])
                 node_role_map = {node['name']: node.get('role', group_name) for node in nodes_list}
                 
+                # Extract node capacities (CPU cores and RAM size) for this group
+                node_capacities = group_data.get('node_capacities', {})
+                
                 # Update time_range from first successful group
                 if not structured['time_range'] and 'time_range' in group_data:
                     structured['time_range'] = group_data.get('time_range', {})
@@ -102,21 +105,21 @@ class nodeUsageELT(utilityELT):
                 # Extract metrics from this group
                 metrics = group_data.get('metrics', {})
                 
-                # Extract each metric type
+                # Extract each metric type with node capacities
                 if 'cpu_usage' in metrics:
-                    self._extract_cpu_usage(metrics['cpu_usage'], structured, node_role_map)
+                    self._extract_cpu_usage(metrics['cpu_usage'], structured, node_role_map, node_capacities)
                 
                 if 'memory_used' in metrics:
-                    self._extract_memory_used(metrics['memory_used'], structured, node_role_map)
+                    self._extract_memory_used(metrics['memory_used'], structured, node_role_map, node_capacities)
                 
                 if 'memory_cache_buffer' in metrics:
-                    self._extract_memory_cache_buffer(metrics['memory_cache_buffer'], structured, node_role_map)
+                    self._extract_memory_cache_buffer(metrics['memory_cache_buffer'], structured, node_role_map, node_capacities)
                 
                 if 'cgroup_cpu_usage' in metrics:
-                    self._extract_cgroup_cpu_usage(metrics['cgroup_cpu_usage'], structured, node_role_map)
+                    self._extract_cgroup_cpu_usage(metrics['cgroup_cpu_usage'], structured, node_role_map, node_capacities)
                 
                 if 'cgroup_rss_usage' in metrics:
-                    self._extract_cgroup_rss_usage(metrics['cgroup_rss_usage'], structured, node_role_map)
+                    self._extract_cgroup_rss_usage(metrics['cgroup_rss_usage'], structured, node_role_map, node_capacities)
             
             # Generate overview from all node groups
             self._generate_overview_from_groups(node_groups, structured)
@@ -129,25 +132,28 @@ class nodeUsageELT(utilityELT):
             nodes_list = actual_data.get('nodes', [])
             node_role_map = {node['name']: node.get('role', node_group) for node in nodes_list}
             
+            # Extract node capacities (CPU cores and RAM size)
+            node_capacities = actual_data.get('node_capacities', {})
+            
             structured['time_range'] = actual_data.get('time_range', {})
             
             metrics = actual_data.get('metrics', {})
             
-            # Extract each metric type
+            # Extract each metric type with node capacities
             if 'cpu_usage' in metrics:
-                self._extract_cpu_usage(metrics['cpu_usage'], structured, node_role_map)
+                self._extract_cpu_usage(metrics['cpu_usage'], structured, node_role_map, node_capacities)
             
             if 'memory_used' in metrics:
-                self._extract_memory_used(metrics['memory_used'], structured, node_role_map)
+                self._extract_memory_used(metrics['memory_used'], structured, node_role_map, node_capacities)
             
             if 'memory_cache_buffer' in metrics:
-                self._extract_memory_cache_buffer(metrics['memory_cache_buffer'], structured, node_role_map)
+                self._extract_memory_cache_buffer(metrics['memory_cache_buffer'], structured, node_role_map, node_capacities)
             
             if 'cgroup_cpu_usage' in metrics:
-                self._extract_cgroup_cpu_usage(metrics['cgroup_cpu_usage'], structured, node_role_map)
+                self._extract_cgroup_cpu_usage(metrics['cgroup_cpu_usage'], structured, node_role_map, node_capacities)
             
             if 'cgroup_rss_usage' in metrics:
-                self._extract_cgroup_rss_usage(metrics['cgroup_rss_usage'], structured, node_role_map)
+                self._extract_cgroup_rss_usage(metrics['cgroup_rss_usage'], structured, node_role_map, node_capacities)
             
             # Generate overview
             self._generate_overview(actual_data, structured, node_role_map)
@@ -156,8 +162,12 @@ class nodeUsageELT(utilityELT):
     
     def _extract_cpu_usage(self, metric_data: Dict[str, Any], 
                           structured: Dict[str, Any], 
-                          node_role_map: Dict[str, str]):
-        """Extract CPU usage metrics grouped by role"""
+                          node_role_map: Dict[str, str],
+                          node_capacities: Dict[str, Any] = None):
+        """Extract CPU usage metrics grouped by role with CPU cores and RAM size"""
+        if node_capacities is None:
+            node_capacities = {}
+        
         nodes = metric_data.get('nodes', {})
         
         # Collect all total CPU values for top identification
@@ -173,8 +183,14 @@ class nodeUsageELT(utilityELT):
         
         # Process each node
         for node_name, node_data in nodes.items():
+            # Get role using utility method
             role = self._get_node_role(node_name, node_role_map)
             table_key = f'cpu_usage_{role}'
+            
+            # Get node capacity info
+            capacity_info = node_capacities.get(node_name, {})
+            cpu_cores = capacity_info.get('cpu_cores') if isinstance(capacity_info, dict) else None
+            ram_gb = capacity_info.get('memory_gb') if isinstance(capacity_info, dict) else None
             
             modes = node_data.get('modes', {})
             total = node_data.get('total', {})
@@ -186,6 +202,9 @@ class nodeUsageELT(utilityELT):
                 
                 structured[table_key].append({
                     'Node': self.truncate_node_name(node_name),
+                    'Role': role.title(),
+                    'CPU Cores': self.format_cpu_cores(cpu_cores),
+                    'RAM Size': self.format_ram_size_gb(ram_gb),
                     'Mode': mode,
                     'Avg': self._format_cpu_value(avg_val, is_top=False),
                     'Max': self._format_cpu_value(max_val, is_top=False)
@@ -199,6 +218,9 @@ class nodeUsageELT(utilityELT):
                 
                 structured[table_key].append({
                     'Node': self.truncate_node_name(node_name),
+                    'Role': role.title(),
+                    'CPU Cores': self.format_cpu_cores(cpu_cores),
+                    'RAM Size': self.format_ram_size_gb(ram_gb),
                     'Mode': '<strong>TOTAL</strong>',
                     'Avg': f'<strong>{self._format_cpu_value(avg_val, is_top=False)}</strong>',
                     'Max': f'<strong>{self._format_cpu_value(max_val, is_top=is_top)}</strong>'
@@ -206,76 +228,80 @@ class nodeUsageELT(utilityELT):
     
     def _extract_memory_used(self, metric_data: Dict[str, Any], 
                             structured: Dict[str, Any], 
-                            node_role_map: Dict[str, str]):
-        """Extract memory used metrics grouped by role"""
+                            node_role_map: Dict[str, str],
+                            node_capacities: Dict[str, Any] = None):
+        """Extract memory used metrics grouped by role with CPU cores, RAM size, and usage percentage"""
+        if node_capacities is None:
+            node_capacities = {}
+        
         nodes = metric_data.get('nodes', {})
         
-        # Collect all max values for top identification
-        all_values = []
+        # Collect all max percentage values for top identification
+        all_percentages = []
         for node_name, node_data in nodes.items():
             role = self._get_node_role(node_name, node_role_map)
             
-            # Check if we have percentage data
-            if 'max_percent' in node_data:
+            # Calculate RAM usage percentage if we have capacity info
+            capacity_info = node_capacities.get(node_name, {})
+            ram_gb = capacity_info.get('memory_gb') if isinstance(capacity_info, dict) else None
+            max_gb = float(node_data.get('max', 0))
+            
+            if ram_gb and ram_gb > 0:
+                max_pct = self.calculate_ram_usage_percentage(max_gb, ram_gb)
+                all_percentages.append((node_name, role, max_pct))
+            elif 'max_percent' in node_data:
                 max_pct = float(node_data.get('max_percent', 0))
-                all_values.append((node_name, role, max_pct))
-            else:
-                max_val = float(node_data.get('max', 0))
-                all_values.append((node_name, role, max_val))
+                all_percentages.append((node_name, role, max_pct))
         
-        # Find top 1
-        top_value = max((v[2] for v in all_values), default=0) if all_values else 0
+        # Find top 1 by percentage
+        top_percentage = max((v[2] for v in all_percentages), default=0) if all_percentages else 0
         
         # Process each node
         for node_name, node_data in nodes.items():
             role = self._get_node_role(node_name, node_role_map)
             table_key = f'memory_used_{role}'
             
+            # Get node capacity info
+            capacity_info = node_capacities.get(node_name, {})
+            cpu_cores = capacity_info.get('cpu_cores') if isinstance(capacity_info, dict) else None
+            ram_gb = capacity_info.get('memory_gb') if isinstance(capacity_info, dict) else None
+            
             avg_gb = float(node_data.get('avg', 0))
             max_gb = float(node_data.get('max', 0))
             
-            # Check if we have percentage columns
-            if 'avg_percent' in node_data and 'max_percent' in node_data:
-                avg_pct = float(node_data.get('avg_percent', 0))
-                max_pct = float(node_data.get('max_percent', 0))
-                is_top = (max_pct == top_value and max_pct > 0)
-                
-                structured[table_key].append({
-                    'Node': self.truncate_node_name(node_name),
-                    'Avg (GB)': f'{avg_gb:.2f}',
-                    'RAM Used (%)': self._format_memory_percent(avg_pct, is_top=False),
-                    'Max (GB)': f'{max_gb:.2f}',
-                    'Max RAM (%)': self._format_memory_percent(max_pct, is_top=is_top)
-                })
-            else:
-                # Fallback without percentages
-                is_top = (max_gb == top_value and max_gb > 0)
-                thresholds = self.metric_configs['memory_used']['thresholds']
-                
-                structured[table_key].append({
-                    'Node': self.truncate_node_name(node_name),
-                    'Avg': self.highlight_critical_values(avg_gb, thresholds, ' GB', is_top=False),
-                    'Max': self.highlight_critical_values(max_gb, thresholds, ' GB', is_top=is_top)
-                })
+            # Calculate RAM usage percentages
+            avg_pct = self.calculate_ram_usage_percentage(avg_gb, ram_gb) if ram_gb and ram_gb > 0 else 0.0
+            max_pct = self.calculate_ram_usage_percentage(max_gb, ram_gb) if ram_gb and ram_gb > 0 else 0.0
+            
+            is_top = (max_pct == top_percentage and max_pct > 0)
+            
+            structured[table_key].append({
+                'Node': self.truncate_node_name(node_name),
+                'Role': role.title(),
+                'CPU Cores': self.format_cpu_cores(cpu_cores),
+                'RAM Size': self.format_ram_size_gb(ram_gb),
+                'Avg (GB)': f'{avg_gb:.2f}',
+                'RAM Used (%)': self.format_ram_usage_percentage(avg_pct, is_top=False),
+                'Max (GB)': f'{max_gb:.2f}',
+                'Max RAM (%)': self.format_ram_usage_percentage(max_pct, is_top=is_top)
+            })
     
     def _extract_memory_cache_buffer(self, metric_data: Dict[str, Any], 
                                      structured: Dict[str, Any], 
-                                     node_role_map: Dict[str, str]):
-        """Extract memory cache/buffer metrics grouped by role"""
+                                     node_role_map: Dict[str, str],
+                                     node_capacities: Dict[str, Any] = None):
+        """Extract memory cache/buffer metrics grouped by role with CPU cores and RAM size"""
+        if node_capacities is None:
+            node_capacities = {}
+        
         nodes = metric_data.get('nodes', {})
         
         # Collect all max values for top identification
         all_values = []
         for node_name, node_data in nodes.items():
             role = self._get_node_role(node_name, node_role_map)
-            
-            # Check if we have percentage data
-            if 'max_percent' in node_data:
-                max_pct = float(node_data.get('max_percent', 0))
-                all_values.append((node_name, role, max_pct))
-            else:
-                max_val = float(node_data.get('max', 0))
-                all_values.append((node_name, role, max_val))
+            max_val = float(node_data.get('max', 0))
+            all_values.append((node_name, role, max_val))
         
         # Find top 1
         top_value = max((v[2] for v in all_values), default=0) if all_values else 0
@@ -285,37 +311,34 @@ class nodeUsageELT(utilityELT):
             role = self._get_node_role(node_name, node_role_map)
             table_key = f'memory_cache_buffer_{role}'
             
+            # Get node capacity info
+            capacity_info = node_capacities.get(node_name, {})
+            cpu_cores = capacity_info.get('cpu_cores') if isinstance(capacity_info, dict) else None
+            ram_gb = capacity_info.get('memory_gb') if isinstance(capacity_info, dict) else None
+            
             avg_gb = float(node_data.get('avg', 0))
             max_gb = float(node_data.get('max', 0))
             
-            # Check if we have percentage columns
-            if 'avg_percent' in node_data and 'max_percent' in node_data:
-                avg_pct = float(node_data.get('avg_percent', 0))
-                max_pct = float(node_data.get('max_percent', 0))
-                is_top = (max_pct == top_value and max_pct > 0)
-                
-                structured[table_key].append({
-                    'Node': self.truncate_node_name(node_name),
-                    'Avg (GB)': f'{avg_gb:.2f}',
-                    'Cache/Buffer (%)': self._format_memory_percent(avg_pct, is_top=False),
-                    'Max (GB)': f'{max_gb:.2f}',
-                    'Max Cache (%)': self._format_memory_percent(max_pct, is_top=is_top)
-                })
-            else:
-                # Fallback without percentages
-                is_top = (max_gb == top_value and max_gb > 0)
-                thresholds = self.metric_configs['memory_cache_buffer']['thresholds']
-                
-                structured[table_key].append({
-                    'Node': self.truncate_node_name(node_name),
-                    'Avg': self.highlight_critical_values(avg_gb, thresholds, ' GB', is_top=False),
-                    'Max': self.highlight_critical_values(max_gb, thresholds, ' GB', is_top=is_top)
-                })
+            is_top = (max_gb == top_value and max_gb > 0)
+            thresholds = self.metric_configs['memory_cache_buffer']['thresholds']
+            
+            structured[table_key].append({
+                'Node': self.truncate_node_name(node_name),
+                'Role': role.title(),
+                'CPU Cores': self.format_cpu_cores(cpu_cores),
+                'RAM Size': self.format_ram_size_gb(ram_gb),
+                'Avg': self.highlight_critical_values(avg_gb, thresholds, ' GB', is_top=False),
+                'Max': self.highlight_critical_values(max_gb, thresholds, ' GB', is_top=is_top)
+            })
     
     def _extract_cgroup_cpu_usage(self, metric_data: Dict[str, Any], 
                                   structured: Dict[str, Any], 
-                                  node_role_map: Dict[str, str]):
-        """Extract cgroup CPU usage metrics grouped by role"""
+                                  node_role_map: Dict[str, str],
+                                  node_capacities: Dict[str, Any] = None):
+        """Extract cgroup CPU usage metrics grouped by role with CPU cores and RAM size"""
+        if node_capacities is None:
+            node_capacities = {}
+        
         nodes = metric_data.get('nodes', {})
         
         # Collect all total max values for top identification
@@ -334,6 +357,11 @@ class nodeUsageELT(utilityELT):
             role = self._get_node_role(node_name, node_role_map)
             table_key = f'cgroup_cpu_usage_{role}'
             
+            # Get node capacity info
+            capacity_info = node_capacities.get(node_name, {})
+            cpu_cores = capacity_info.get('cpu_cores') if isinstance(capacity_info, dict) else None
+            ram_gb = capacity_info.get('memory_gb') if isinstance(capacity_info, dict) else None
+            
             cgroups = node_data.get('cgroups', {})
             total = node_data.get('total', {})
             
@@ -344,6 +372,9 @@ class nodeUsageELT(utilityELT):
                 
                 structured[table_key].append({
                     'Node': self.truncate_node_name(node_name),
+                    'Role': role.title(),
+                    'CPU Cores': self.format_cpu_cores(cpu_cores),
+                    'RAM Size': self.format_ram_size_gb(ram_gb),
                     'Cgroup': cgroup_name,
                     'Avg': self._format_cpu_value(avg_val, is_top=False),
                     'Max': self._format_cpu_value(max_val, is_top=False)
@@ -357,6 +388,9 @@ class nodeUsageELT(utilityELT):
                 
                 structured[table_key].append({
                     'Node': self.truncate_node_name(node_name),
+                    'Role': role.title(),
+                    'CPU Cores': self.format_cpu_cores(cpu_cores),
+                    'RAM Size': self.format_ram_size_gb(ram_gb),
                     'Cgroup': '<strong>TOTAL</strong>',
                     'Avg': f'<strong>{self._format_cpu_value(avg_val, is_top=False)}</strong>',
                     'Max': f'<strong>{self._format_cpu_value(max_val, is_top=is_top)}</strong>'
@@ -364,8 +398,12 @@ class nodeUsageELT(utilityELT):
     
     def _extract_cgroup_rss_usage(self, metric_data: Dict[str, Any], 
                                   structured: Dict[str, Any], 
-                                  node_role_map: Dict[str, str]):
-        """Extract cgroup RSS usage metrics grouped by role"""
+                                  node_role_map: Dict[str, str],
+                                  node_capacities: Dict[str, Any] = None):
+        """Extract cgroup RSS usage metrics grouped by role with CPU cores and RAM size"""
+        if node_capacities is None:
+            node_capacities = {}
+        
         nodes = metric_data.get('nodes', {})
         
         # Collect all total max values for top identification
@@ -384,6 +422,11 @@ class nodeUsageELT(utilityELT):
             role = self._get_node_role(node_name, node_role_map)
             table_key = f'cgroup_rss_usage_{role}'
             
+            # Get node capacity info
+            capacity_info = node_capacities.get(node_name, {})
+            cpu_cores = capacity_info.get('cpu_cores') if isinstance(capacity_info, dict) else None
+            ram_gb = capacity_info.get('memory_gb') if isinstance(capacity_info, dict) else None
+            
             cgroups = node_data.get('cgroups', {})
             total = node_data.get('total', {})
             
@@ -394,6 +437,9 @@ class nodeUsageELT(utilityELT):
                 
                 structured[table_key].append({
                     'Node': self.truncate_node_name(node_name),
+                    'Role': role.title(),
+                    'CPU Cores': self.format_cpu_cores(cpu_cores),
+                    'RAM Size': self.format_ram_size_gb(ram_gb),
                     'Cgroup': cgroup_name,
                     'Avg': self._format_memory_gb(avg_val, is_top=False),
                     'Max': self._format_memory_gb(max_val, is_top=False)
@@ -407,6 +453,9 @@ class nodeUsageELT(utilityELT):
                 
                 structured[table_key].append({
                     'Node': self.truncate_node_name(node_name),
+                    'Role': role.title(),
+                    'CPU Cores': self.format_cpu_cores(cpu_cores),
+                    'RAM Size': self.format_ram_size_gb(ram_gb),
                     'Cgroup': '<strong>TOTAL</strong>',
                     'Avg': f'<strong>{self._format_memory_gb(avg_val, is_top=False)}</strong>',
                     'Max': f'<strong>{self._format_memory_gb(max_val, is_top=is_top)}</strong>'
@@ -472,9 +521,16 @@ class nodeUsageELT(utilityELT):
                 'Status': self.create_status_badge('success', 'Active')
             })
     
-    def _get_node_role(self, node_name: str, node_role_map: Dict[str, str]) -> str:
-        """Get role for a node, defaulting to 'worker' if not found"""
-        return node_role_map.get(node_name, 'worker')
+    def _get_node_role(self, node_name: str, node_role_map: Dict[str, str] = None) -> str:
+        """Get role for a node using get_node_role_from_labels, with fallback to node_role_map"""
+        # First try to get role from labels using utility method
+        role = self.get_node_role_from_labels(node_name)
+        
+        # If utility method returns 'worker' (default) and we have a node_role_map, check it
+        if role == 'worker' and node_role_map and node_name in node_role_map:
+            role = node_role_map[node_name]
+        
+        return role
     
     def _format_cpu_value(self, value: float, is_top: bool = False) -> str:
         """Format CPU percentage value with thresholds and top highlighting"""

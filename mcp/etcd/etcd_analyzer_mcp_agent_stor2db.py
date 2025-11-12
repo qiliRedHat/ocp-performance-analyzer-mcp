@@ -354,7 +354,7 @@ class ETCDAnalyzerStorDBMCPAgent:
             logger.info("Collecting disk I/O metrics...")
             
             time_params = self._build_time_params(state)
-            disk_io_data = await self._call_mcp_tool("get_etcd_disk_io", time_params)
+            disk_io_data = await self._call_mcp_tool("get_node_disk_io", time_params)
             
             if disk_io_data.get("status") == "success":
                 return {

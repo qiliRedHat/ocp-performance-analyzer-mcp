@@ -1264,3 +1264,105 @@ class utilityELT:
                 return formatted
         except (ValueError, TypeError):
             return str(value)
+    
+    # ============================================================================
+    # NODE CAPACITY UTILITIES
+    # ============================================================================
+    
+    def calculate_ram_usage_percentage(self, used_gb: float, total_gb: float) -> float:
+        """Calculate RAM usage percentage from used and total GB
+        
+        Args:
+            used_gb: Memory used in GB
+            total_gb: Total memory capacity in GB
+            
+        Returns:
+            Usage percentage (0-100), or 0.0 if total is 0 or invalid
+        """
+        try:
+            used = float(used_gb) if used_gb is not None else 0.0
+            total = float(total_gb) if total_gb is not None else 0.0
+            
+            if total <= 0:
+                return 0.0
+            
+            percentage = (used / total) * 100.0
+            # Clamp to 0-100 range
+            return max(0.0, min(100.0, percentage))
+        except (ValueError, TypeError, ZeroDivisionError):
+            return 0.0
+    
+    def format_cpu_cores(self, cores: Union[int, float, None]) -> str:
+        """Format CPU cores count for display
+        
+        Args:
+            cores: Number of CPU cores (int, float, or None)
+            
+        Returns:
+            Formatted string like "8 cores" or "N/A" if invalid
+        """
+        try:
+            if cores is None:
+                return "N/A"
+            core_count = int(float(cores))
+            if core_count <= 0:
+                return "N/A"
+            return f"{core_count} cores"
+        except (ValueError, TypeError):
+            return "N/A"
+    
+    def format_ram_size_gb(self, gb: Union[float, None]) -> str:
+        """Format RAM size in GB for display
+        
+        Args:
+            gb: RAM size in GB (float or None)
+            
+        Returns:
+            Formatted string like "64.0 GB" or "N/A" if invalid
+        """
+        try:
+            if gb is None:
+                return "N/A"
+            ram_gb = float(gb)
+            if ram_gb <= 0:
+                return "N/A"
+            # Format with appropriate precision
+            if ram_gb >= 1000:
+                return f"{ram_gb:.0f} GB"
+            elif ram_gb >= 100:
+                return f"{ram_gb:.1f} GB"
+            else:
+                return f"{ram_gb:.2f} GB"
+        except (ValueError, TypeError):
+            return "N/A"
+    
+    def format_ram_usage_percentage(self, percentage: float, is_top: bool = False) -> str:
+        """Format RAM usage percentage with color coding and thresholds
+        
+        Args:
+            percentage: RAM usage percentage (0-100)
+            is_top: True if this is the top 1 value
+            
+        Returns:
+            HTML formatted string with appropriate highlighting
+        """
+        try:
+            pct = float(percentage) if percentage is not None else 0.0
+            thresholds = {'critical': 85.0, 'warning': 70.0}
+            
+            formatted = f"{pct:.2f}%"
+            
+            # Top 1 highlighting
+            if is_top and pct > 0:
+                return f'<span class="text-primary font-weight-bold bg-light px-1">🏆 {formatted}</span>'
+            # Critical highlighting
+            elif pct >= thresholds['critical']:
+                return f'<span class="text-danger font-weight-bold">⚠️ {formatted}</span>'
+            # Warning highlighting
+            elif pct >= thresholds['warning']:
+                return f'<span class="text-warning font-weight-bold">{formatted}</span>'
+            # Normal value
+            else:
+                return formatted
+        except (ValueError, TypeError):
+            return f"{percentage}%" if percentage is not None else "N/A"

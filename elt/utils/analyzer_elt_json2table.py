@@ -115,6 +115,18 @@ class GenericELT(utilityELT):
         except ImportError as e:
             logger.warning(f"Could not import etcd_cluster_status handler: {e}")
 
+        # Register network_l1 handler BEFORE node_usage to ensure it's checked first
+        # (network_l1 is more specific and also uses node_groups structure)
+        try:
+            from ..net.analyzer_elt_network_l1 import networkL1ELT
+            register_metric_handler(
+                'network_l1', 
+                networkL1ELT,
+                self._is_network_l1
+            )
+        except ImportError as e:
+            logger.warning(f"Could not import network_l1 handler: {e}")
+
         try:
             from ..node.analyzer_elt_node_usage import nodeUsageELT
             register_metric_handler(
@@ -123,7 +135,7 @@ class GenericELT(utilityELT):
                 self._is_node_usage
             )
         except ImportError as e:
-            logger.warning(f"Could not import disk_io handler: {e}")
+            logger.warning(f"Could not import node_usage handler: {e}")
 
         try:
             from ..pods.analyzer_elt_pods_usage import podsUsageELT
@@ -144,17 +156,6 @@ class GenericELT(utilityELT):
             )
         except ImportError as e:
             logger.warning(f"Could not import disk_io handler: {e}")
-
-        # Register network_l1 handler
-        try:
-            from ..net.analyzer_elt_network_l1 import networkL1ELT
-            register_metric_handler(
-                'network_l1', 
-                networkL1ELT,
-                self._is_network_l1
-            )
-        except ImportError as e:
-            logger.warning(f"Could not import network_l1 handler: {e}")
         
         # Register network_socket_tcp handler
         try:
@@ -303,6 +304,16 @@ class GenericELT(utilityELT):
             )
         except ImportError as e:
             logger.warning(f"Could not import etcd_bottleneck_analysis handler: {e}")
+
+        try:
+            from ..etcd.etcd_analyzer_performance_elt_report import etcdReportELT
+            register_metric_handler(
+                'etcd_performance_report',
+                etcdReportELT,
+                self._is_performance_report
+            )
+        except ImportError as e:
+            logger.warning(f"Could not import etcd_performance_report handler: {e}")
      
 
         # Register api_stats BEFORE ovn_latency to ensure correct identification
@@ -425,17 +436,36 @@ class GenericELT(utilityELT):
     @staticmethod
     def _is_node_usage(data: Dict[str, Any]) -> bool:
         """Identify node usage data"""
+        # First, exclude network_l1 data
+        if 'category' in data and data.get('category') == 'network_l1':
+            return False
+        
         if 'category' in data and data.get('category') == 'node_usage':
             return True
         
         # Check nested structure
         if 'data' in data and isinstance(data.get('data'), dict):
             inner = data['data']
+            # Exclude network_l1
+            if 'category' in inner and inner.get('category') == 'network_l1':
+                return False
             if 'category' in inner and inner.get('category') == 'node_usage':
                 return True
-            # Check for node_groups structure (new format)
+            # Check for node_groups structure (new format) - but exclude if it has network_l1 metrics
             if 'node_groups' in inner and isinstance(inner.get('node_groups'), dict):
-                return True
+                node_groups = inner['node_groups']
+                # Check if any metrics are network_l1 related
+                for role_data in node_groups.values():
+                    if isinstance(role_data, dict) and 'metrics' in role_data:
+                        metrics = role_data['metrics']
+                        if any('network_l1' in str(k) for k in metrics.keys()):
+                            return False
+                # If no network_l1 metrics found, check for node usage specific metrics
+                for role_data in node_groups.values():
+                    if isinstance(role_data, dict) and 'metrics' in role_data:
+                        metrics = role_data['metrics']
+                        if any(k in metrics for k in ['cpu_usage', 'memory_used', 'cgroup_cpu_usage', 'cgroup_rss_usage']):
+                            return True
             # Check for metrics with node usage indicators
             metrics = inner.get('metrics', {})
             if isinstance(metrics, dict):
@@ -447,9 +477,21 @@ class GenericELT(utilityELT):
             if any(k in data['metrics'] for k in ['cpu_usage', 'memory_used', 'cgroup_cpu_usage', 'cgroup_rss_usage']):
                 return True
         
-        # Check for node_groups at top level (new format)
+        # Check for node_groups at top level (new format) - but exclude if it has network_l1 metrics
         if 'node_groups' in data and isinstance(data.get('node_groups'), dict):
-            return True
+            node_groups = data['node_groups']
+            # Check if any metrics are network_l1 related
+            for role_data in node_groups.values():
+                if isinstance(role_data, dict) and 'metrics' in role_data:
+                    metrics = role_data['metrics']
+                    if any('network_l1' in str(k) for k in metrics.keys()):
+                        return False
+            # If no network_l1 metrics, check for node usage specific metrics
+            for role_data in node_groups.values():
+                if isinstance(role_data, dict) and 'metrics' in role_data:
+                    metrics = role_data['metrics']
+                    if any(k in metrics for k in ['cpu_usage', 'memory_used', 'cgroup_cpu_usage', 'cgroup_rss_usage']):
+                        return True
         
         # Check for node_group in query_params
         if 'query_params' in data and isinstance(data.get('query_params'), dict):
@@ -509,8 +551,26 @@ class GenericELT(utilityELT):
     @staticmethod
     def _is_network_l1(data: Dict[str, Any]) -> bool:
         """Identify network L1 data"""
+        # Check top-level category
         if 'category' in data and data.get('category') == 'network_l1':
             return True
+        
+        # Check nested structure
+        if 'data' in data and isinstance(data.get('data'), dict):
+            inner = data['data']
+            # Check category in nested data
+            if 'category' in inner and inner.get('category') == 'network_l1':
+                return True
+            # Check for node_groups with network_l1 metrics
+            if 'node_groups' in inner and isinstance(inner.get('node_groups'), dict):
+                node_groups = inner['node_groups']
+                for role_data in node_groups.values():
+                    if isinstance(role_data, dict) and 'metrics' in role_data:
+                        metrics = role_data['metrics']
+                        if any('network_l1' in str(k) for k in metrics.keys()):
+                            return True
+        
+        # Check top-level node_groups (fallback)
         if 'node_groups' in data and isinstance(data.get('node_groups'), dict):
             node_groups = data['node_groups']
             for role_data in node_groups.values():
@@ -518,6 +578,7 @@ class GenericELT(utilityELT):
                     metrics = role_data['metrics']
                     if any('network_l1' in str(k) for k in metrics.keys()):
                         return True
+        
         return False
 
     @staticmethod
@@ -755,6 +816,32 @@ class GenericELT(utilityELT):
         return False
 
     @staticmethod
+    def _is_performance_report(data: Dict[str, Any]) -> bool:
+        """Identify etcd performance report data"""
+        # Check for analysis_results key (main indicator)
+        if 'analysis_results' in data and isinstance(data.get('analysis_results'), dict):
+            analysis_results = data['analysis_results']
+            # Check for performance report structure
+            if any(key in analysis_results for key in [
+                'critical_metrics_analysis', 'performance_summary', 
+                'baseline_comparison', 'recommendations', 'alerts'
+            ]):
+                return True
+        
+        # Check for performance_report text field (indicator of report)
+        if 'performance_report' in data and isinstance(data.get('performance_report'), str):
+            # Also check for analysis_results to confirm
+            if 'analysis_results' in data:
+                return True
+        
+        # Check for test_id and status='success' with analysis_results
+        if 'test_id' in data and data.get('status') == 'success':
+            if 'analysis_results' in data:
+                return True
+        
+        return False
+
+    @staticmethod
     def _is_general_info(data: Dict[str, Any]) -> bool:
         """Identify general info data"""
         # Check top-level category
@@ -987,8 +1074,9 @@ class GenericELT(utilityELT):
         """Process data using specialized handler"""
         try:
             # Extract nested data if needed
-            # For etcd_performance_deep_drive and etcd_bottleneck_analysis, pass the full data structure to preserve summary/analysis
-            if data_type in ['etcd_performance_deep_drive', 'etcd_bottleneck_analysis']:
+            # For etcd_performance_deep_drive, etcd_bottleneck_analysis, and etcd_performance_report, 
+            # pass the full data structure to preserve summary/analysis
+            if data_type in ['etcd_performance_deep_drive', 'etcd_bottleneck_analysis', 'etcd_performance_report']:
                 actual_data = data
             else:
                 actual_data = self._extract_actual_data(data, data_type)
@@ -1070,6 +1158,24 @@ class GenericELT(utilityELT):
             elif data_type == 'cluster_alert':
                 structured_data = handler.extract_cluster_alert(actual_data) if hasattr(handler, 'extract_cluster_alert') else {}
                 summary_method = 'summarize_cluster_alert'
+            elif data_type == 'etcd_performance_report':
+                # Special handling for performance report - it has its own processing method
+                if hasattr(handler, 'process_performance_report'):
+                    html_tables = handler.process_performance_report(actual_data)
+                    # Create a summary from the report
+                    summary = f"<div class='alert alert-info'><strong>Performance Report Generated</strong><br>Test ID: {actual_data.get('test_id', 'Unknown')}<br>Duration: {actual_data.get('duration', 'Unknown')}</div>"
+                    return {
+                        'success': True,
+                        'data_type': data_type,
+                        'summary': summary,
+                        'html_tables': html_tables,
+                        'dataframes': {},  # Performance report doesn't use dataframes
+                        'structured_data': actual_data,
+                        'timestamp': actual_data.get('timestamp', datetime.now().isoformat())
+                    }
+                else:
+                    structured_data = {}
+                    summary_method = 'summarize_performance_report'
             else:
                 # Generic fallback
                 structured_data = handler.extract_cluster_info(actual_data) if hasattr(handler, 'extract_cluster_info') else {}

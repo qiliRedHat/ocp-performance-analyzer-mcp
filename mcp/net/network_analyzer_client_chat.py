@@ -19,6 +19,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 
+# Ensure project root is on sys.path for imports
+try:
+    CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+    PROJECT_ROOT = os.path.dirname(os.path.dirname(CURRENT_DIR))
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
+except Exception:
+    pass
+
 # MCP and LangGraph imports
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
@@ -33,18 +42,12 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.checkpoint.memory import MemorySaver
 from dotenv import load_dotenv
 
-# Ensure project root is on sys.path so package imports like `elt.*` work when run directly
-CURRENT_DIR = os.path.dirname(__file__)
-PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
 # Fallback-safe import for HTML conversion utility
 try:
     from elt.utils.analyzer_elt_json2table import convert_json_to_html_table
-except Exception:
+except ImportError:
+    # Fallback: return pretty JSON when converter module not available
     def convert_json_to_html_table(json_data):
-        # Minimal fallback: pretty JSON string when converter module not available
         try:
             return json.dumps(json_data, indent=2) if not isinstance(json_data, str) else json_data
         except Exception:
@@ -204,6 +207,7 @@ class MCPClient:
 
                         # Parameters should already be wrapped in 'request' key by MCPTool._arun
                         # If not wrapped, wrap them here
+                        # FastMCP expects {"request": {}} format even for tools with no parameters
                         if params is None:
                             request_params = {"request": {}}
                         elif "request" not in params:
@@ -237,13 +241,13 @@ class MCPClient:
                                 json_data = json.loads(content_text)
                                 logger.info(f"Parsed JSON from {tool_name}")
                                 
-                                # Return health check data directly
-                                if tool_name in ["get_mcp_health_status"]:
+                                # Return health check data directly (no HTML conversion)
+                                if tool_name in ["mcp_health_checking", "get_server_health", "get_mcp_health_status"]:
                                     return json_data
                                 else:
                                     # Format other data as HTML table
                                     print("call_tool("+tool_name+"):",json_data)
-                                    print("convert_json_to_html_table(json_data):",convert_json_to_html_table(json_data))
+                                    print("The result of convert_json_to_html_table(json_data) is:",convert_json_to_html_table(json_data))
                                     return convert_json_to_html_table(json_data)
                                     # return json_data
                             else:
@@ -332,7 +336,7 @@ class MCPClient:
             await self.connect()
             
             # Try different health check tools in order of preference
-            health_tools = ["get_mcp_health_status"]
+            health_tools = ["get_server_health", "get_ocp_cluster_info"]
             
             health_result = None
             tool_used = None
@@ -342,7 +346,9 @@ class MCPClient:
                 if any(tool["name"] == tool_name for tool in self.available_tools):
                     try:
                         logger.info(f"Trying health check with tool: {tool_name}")
-                        health_result = await self.call_tool(tool_name, {})
+                        # Use proper parameter wrapping for MCP tools
+                        wrapped_params = {"request": {}}
+                        health_result = await self.call_tool(tool_name, wrapped_params)
                         
                         # Check if we got a valid result
                         if (isinstance(health_result, dict) and 
@@ -362,14 +368,32 @@ class MCPClient:
             if health_result and tool_used:
                 # Extract health information based on tool type
                 overall_health = "unknown"
-                if tool_used == "get_mcp_health_status":
+                prometheus_connected = False
+                kubeapi_connected = False
+                collectors_initialized = False
+                
+                if tool_used == "get_server_health":
                     overall_health = health_result.get("status", "unknown")
+                    collectors_initialized = health_result.get("collectors_initialized", False)
+                    # Check if prometheus/config are available from details
+                    details = health_result.get("details", {})
+                    config_available = details.get("config", False)
+                    # If config is available, assume prometheus connection is ok
+                    prometheus_connected = config_available
+                    kubeapi_connected = details.get("auth_manager", False)
+                elif tool_used == "get_ocp_cluster_info":
+                    # get_ocp_cluster_info indicates basic connectivity works
+                    overall_health = "healthy"
+                    prometheus_connected = True  # If we can get cluster info, prometheus likely works
+                    kubeapi_connected = True  # If we can get cluster info, kubeapi works
+                    collectors_initialized = True
                 
                 return {
-                    "status": "healthy",
-                    "prometheus_connection": "ok",
+                    "status": "healthy" if overall_health == "healthy" else ("partial" if overall_health == "degraded" else "partial"),
+                    "prometheus_connection": "ok" if prometheus_connected else "error",
                     "tools_available": len(self.available_tools),
                     "overall_cluster_health": overall_health,
+                    "collectors_initialized": collectors_initialized,
                     "tool_used": tool_used,
                     "last_check": datetime.now(timezone.utc).isoformat(),
                     "health_details": health_result
@@ -404,7 +428,7 @@ class ChatBot:
         self.conversations: Dict[str, CompiledStateGraph] = {}
         self.conversation_system_prompts: Dict[str, str] = {}
         
-        # Default system prompt based on OVN-K benchmark capabilities
+        # Default system prompt for Network Analyzer
         self.default_system_prompt = """You are an expert OpenShift and OVN-Kubernetes network analysis assistant with deep knowledge of:
 
 CLUSTER INFORMATION:
@@ -600,7 +624,7 @@ Always structure your responses with:
 - Make the analysis result readable and clear
 - Don't create table.
 
-Provide actionable insights with specific metric values, trends over time, and recommendations based on temporal patterns. explain the business impact of technical issues."""
+Provide actionable insights with specific metric values, trends over time, and recommendations based on temporal patterns. Explain the business impact of technical issues."""
 
         load_dotenv()
         api_key = os.getenv("OPENAI_API_KEY")
@@ -774,8 +798,8 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI app
 app = FastAPI(
-    title="OVN-K Benchmark MCP Client",
-    description="AI-powered chat interface for OpenShift OVN-K performance analysis",
+    title="Network Analyzer MCP Client",
+    description="AI-powered chat interface for OpenShift network analysis",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -789,7 +813,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve the web UI HTML (moved to project-level webroot)
+# Serve the web UI HTML
 HTML_FILE_PATH = os.path.join(
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")),
     "webroot",

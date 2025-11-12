@@ -161,8 +161,10 @@ class apiStatsELT(utilityELT):
             flow_schema = series_info.get('flow_schema', '')
             priority_level = series_info.get('priority_level', '')
             
-            # Format values
-            avg_val = series_info.get('avg_seconds', 0)
+            # Format values - handle None explicitly
+            avg_val = series_info.get('avg_seconds')
+            if avg_val is None:
+                avg_val = 0
             
             avg_display = self.highlight_latency_value(avg_val * 1000, False)  # Convert to ms
             max_display = self.highlight_latency_value(max_val * 1000, is_top)
@@ -219,8 +221,10 @@ class apiStatsELT(utilityELT):
             code = series_info.get('code', '')
             node_name = series_info.get('node_name', '')
             
-            # Format values
-            avg_val = series_info.get('avg_requests_per_sec', 0)
+            # Format values - handle None explicitly
+            avg_val = series_info.get('avg_requests_per_sec')
+            if avg_val is None:
+                avg_val = 0
             
             avg_display = self.highlight_rate_value(avg_val, "req/sec", False)
             max_display = self.highlight_rate_value(max_val, "req/sec", is_top)
@@ -271,8 +275,10 @@ class apiStatsELT(utilityELT):
             priority_level = series_info.get('priority_level', '')
             node_name = series_info.get('node_name', '')
             
-            # Format values
-            avg_val = series_info.get('avg_count', 0)
+            # Format values - handle None explicitly
+            avg_val = series_info.get('avg_count')
+            if avg_val is None:
+                avg_val = 0
             
             # Highlight based on thresholds
             if is_top:
@@ -355,7 +361,10 @@ class apiStatsELT(utilityELT):
             node_name = series_info.get('node_name', '')
             labels = series_info.get('labels', '')
             
-            avg_val = series_info.get(avg_key, 0)
+            # Handle None explicitly
+            avg_val = series_info.get(avg_key)
+            if avg_val is None:
+                avg_val = 0
             
             # Format with unit
             avg_display = self.format_and_highlight(avg_val, unit, config.get('thresholds', {}), False)

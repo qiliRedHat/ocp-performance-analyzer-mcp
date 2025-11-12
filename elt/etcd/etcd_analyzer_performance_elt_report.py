@@ -10,7 +10,7 @@ from datetime import datetime
 import json
 
 # Import the utility class for consistent formatting
-from .etcd_analyzer_elt_utility import utilityELT
+from ..utils.analyzer_elt_utility import utilityELT
 
 
 class etcdReportELT:

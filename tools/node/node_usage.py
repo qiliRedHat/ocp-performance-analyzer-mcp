@@ -173,6 +173,50 @@ class nodeUsageCollector:
             self.logger.error(f"Error collecting node memory capacity: {e}", exc_info=True)
             return {}
     
+    async def _collect_node_cpu_cores(self, prom: PrometheusBaseQuery,
+                                      nodes: List[str],
+                                      node_name_map: Dict[str, str]) -> Dict[str, int]:
+        """Collect total CPU cores for each node"""
+        try:
+            node_pattern = mcpToolsUtility.get_node_pattern(nodes)
+            # Count CPU cores by counting the number of idle mode entries per instance
+            query = f'count(node_cpu_seconds_total{{instance=~"{node_pattern}",mode="idle"}}) by (instance)'
+            
+            self.logger.debug(f"Querying node CPU cores: {query}")
+            
+            # Use instant query to get current CPU core count
+            result = await self._query_instant_wrap(prom, query)
+            
+            if result['status'] != 'success':
+                self.logger.warning(f"Failed to get CPU cores: {result.get('error')}")
+                return {}
+            
+            raw_results = result.get('data', {}).get('result', [])
+            
+            # Extract CPU core count for each node
+            cpu_cores = {}
+            for item in raw_results:
+                instance = item.get('metric', {}).get('instance', 'unknown')
+                value = item.get('value', [None, None])
+                
+                if len(value) >= 2:
+                    try:
+                        # Normalize to full node name
+                        full_name = self._normalize_instance_to_full_name(instance, node_name_map)
+                        
+                        # Get CPU core count (should be an integer)
+                        core_count = int(float(value[1]))
+                        cpu_cores[full_name] = core_count
+                        self.logger.info(f"Node {full_name} CPU cores: {core_count}")
+                    except (ValueError, TypeError, IndexError) as e:
+                        self.logger.warning(f"Failed to parse CPU cores for {instance}: {e}")
+            
+            return cpu_cores
+            
+        except Exception as e:
+            self.logger.error(f"Error collecting node CPU cores: {e}", exc_info=True)
+            return {}
+    
     def _verify_metric_loaded(self, metric_name: str) -> bool:
         """Verify a metric is loaded and log details if not found"""
         metric = self.config.get_metric_by_name(metric_name)
@@ -348,8 +392,9 @@ class nodeUsageCollector:
                     start_str, end_str = prom.get_time_range_from_duration(duration)
                     self.logger.info(f"Using duration {duration}: {start_str} to {end_str}")
                 
-                # First, collect node memory capacities
+                # First, collect node memory capacities and CPU cores
                 node_capacities = await self._collect_node_memory_capacity(prom, nodes, node_name_map)
+                node_cpu_cores = await self._collect_node_cpu_cores(prom, nodes, node_name_map)
                 
                 # Collect metrics using range queries
                 cpu_usage = await self._collect_node_cpu_usage(prom, nodes, start_str, end_str, node_name_map)
@@ -411,7 +456,13 @@ class nodeUsageCollector:
                 },
                 'total_nodes': len(nodes),
                 'nodes': node_details,
-                'node_capacities': {node: {'memory': capacity} for node, capacity in node_capacities.items()},
+                'node_capacities': {
+                    node: {
+                        'memory_gb': node_capacities.get(node),
+                        'cpu_cores': node_cpu_cores.get(node)
+                    } 
+                    for node in nodes
+                },
                 'metrics': {
                     'cpu_usage': cpu_usage,
                     'memory_used': memory_used,

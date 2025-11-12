@@ -249,7 +249,7 @@ class MCPClient:
                                     print("call_tool("+tool_name+"):",json_data)
                                     print("The result of convert_json_to_html_table(json_data) is:",convert_json_to_html_table(json_data))
                                     return convert_json_to_html_table(json_data)
-                                    return json_data
+                                    # return json_data
                             else:
                                 # Return plain text
                                 return content_text
@@ -336,7 +336,7 @@ class MCPClient:
             await self.connect()
             
             # Try different health check tools in order of preference
-            health_tools = ["get_mcp_health_status"]
+            health_tools = ["get_server_health", "get_ocp_cluster_info"]
             
             health_result = None
             tool_used = None
@@ -346,7 +346,9 @@ class MCPClient:
                 if any(tool["name"] == tool_name for tool in self.available_tools):
                     try:
                         logger.info(f"Trying health check with tool: {tool_name}")
-                        health_result = await self.call_tool(tool_name, {})
+                        # Use proper parameter wrapping for MCP tools
+                        wrapped_params = {"request": {}}
+                        health_result = await self.call_tool(tool_name, wrapped_params)
                         
                         # Check if we got a valid result
                         if (isinstance(health_result, dict) and 
@@ -368,20 +370,30 @@ class MCPClient:
                 overall_health = "unknown"
                 prometheus_connected = False
                 kubeapi_connected = False
+                collectors_initialized = False
                 
-                if tool_used == "get_mcp_health_status":
+                if tool_used == "get_server_health":
                     overall_health = health_result.get("status", "unknown")
-                    # Extract connectivity info from health_details
-                    prometheus_info = health_result.get("prometheus", {})
-                    kubeapi_info = health_result.get("kubeapi", {})
-                    prometheus_connected = prometheus_info.get("connected", False)
-                    kubeapi_connected = kubeapi_info.get("connected", False)
+                    collectors_initialized = health_result.get("collectors_initialized", False)
+                    # Check if prometheus/config are available from details
+                    details = health_result.get("details", {})
+                    config_available = details.get("config", False)
+                    # If config is available, assume prometheus connection is ok
+                    prometheus_connected = config_available
+                    kubeapi_connected = details.get("auth_manager", False)
+                elif tool_used == "get_ocp_cluster_info":
+                    # get_ocp_cluster_info indicates basic connectivity works
+                    overall_health = "healthy"
+                    prometheus_connected = True  # If we can get cluster info, prometheus likely works
+                    kubeapi_connected = True  # If we can get cluster info, kubeapi works
+                    collectors_initialized = True
                 
                 return {
                     "status": "healthy" if overall_health == "healthy" else ("partial" if overall_health == "degraded" else "partial"),
                     "prometheus_connection": "ok" if prometheus_connected else "error",
                     "tools_available": len(self.available_tools),
                     "overall_cluster_health": overall_health,
+                    "collectors_initialized": collectors_initialized,
                     "tool_used": tool_used,
                     "last_check": datetime.now(timezone.utc).isoformat(),
                     "health_details": health_result

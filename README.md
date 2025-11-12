@@ -456,7 +456,7 @@ Each analyzer exposes an MCP server with specialized tools:
 - `get_etcd_node_usage` - Master node metrics
 - `get_etcd_disk_wal_fsync` - WAL fsync performance
 - `get_etcd_disk_backend_commit` - Backend commit performance
-- `get_etcd_disk_io` - Disk I/O metrics
+- `get_node_disk_io` - Disk I/O metrics
 - `get_etcd_disk_compact_defrag` - Compaction/defrag metrics
 - `get_etcd_network_io` - Network I/O metrics
 - `get_etcd_performance_deep_drive` - Comprehensive analysis

@@ -32,7 +32,16 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 from dotenv import load_dotenv
-from elt.utils.analyzer_elt_json2table import convert_json_to_html_table
+
+# Fallback-safe import for HTML conversion utility
+try:
+    from elt.utils.analyzer_elt_json2table import convert_json_to_html_table
+except ImportError:
+    def convert_json_to_html_table(json_data):
+        try:
+            return json.dumps(json_data, indent=2) if not isinstance(json_data, str) else json_data
+        except Exception:
+            return str(json_data)
 
 import warnings
 warnings.filterwarnings(
@@ -85,10 +94,16 @@ class MCPTool(BaseTool):
     
     async def _arun(self, **kwargs) -> str:
         try:
+            # Handle both direct kwargs and nested kwargs
             params = kwargs.get('kwargs', kwargs) or {}
             if isinstance(params, dict):
+                # Remove None values to use tool defaults
                 params = {k: v for k, v in params.items() if v is not None}
-            result = await self.mcp_client.call_tool(self.name, params)
+            
+            # Wrap parameters in 'request' key as expected by MCP server
+            wrapped_params = {"request": params} if params else {}
+            
+            result = await self.mcp_client.call_tool(self.name, wrapped_params)
             return json.dumps(result, indent=2)
         except Exception as e:
             logger.error(f"Error calling MCP tool {self.name}: {e}")
@@ -175,13 +190,45 @@ class MCPClient:
                             logger.info(f"Session ID in call_tool: {get_session_id()}")
                         logger.info(f"Calling tool {tool_name} with params {params}")
 
-                        result = await session.call_tool(tool_name, params or {})
+                        # Check if tool has parameters by examining input schema
+                        tool_info = next((t for t in self.available_tools if t["name"] == tool_name), None)
+                        has_params = False
+                        if tool_info and tool_info.get("input_schema"):
+                            schema = tool_info["input_schema"]
+                            # Check if schema has properties (parameters)
+                            if isinstance(schema, dict):
+                                properties = schema.get("properties", {})
+                                has_params = bool(properties and len(properties) > 0)
+                        
+                        # UNIFIED PARAMETER HANDLING: Same as network and ovnk clients
+                        # For tools with no parameters, send empty dict {}
+                        # For tools with parameters, wrap in 'request' key if not already wrapped
+                        if params is None or params == {}:
+                            if has_params:
+                                # Tool expects parameters but none provided, send empty request wrapper
+                                request_params = {"request": {}}
+                            else:
+                                # Tool has no parameters, send empty dict
+                                request_params = {}
+                        elif "request" not in params:
+                            request_params = {"request": params}
+                        else:
+                            request_params = params
 
-                        if not result.content or len(result.content) == 0:
+                        result = await session.call_tool(tool_name, request_params)
+
+                        # Enhanced error handling for JSON parsing
+                        if not result.content:
+                            logger.warning(f"Tool {tool_name} returned empty content")
                             return {"error": "Empty response from tool", "tool": tool_name}
-
+                        
+                        if len(result.content) == 0:
+                            logger.warning(f"Tool {tool_name} returned no content items")
+                            return {"error": "No content items in response", "tool": tool_name}
+                        
                         content_text = result.content[0].text
                         if not content_text or content_text.strip() == "":
+                            logger.warning(f"Tool {tool_name} returned empty text content")
                             return {"error": "Empty text content from tool", "tool": tool_name}
 
                         content_text = content_text.strip()
@@ -190,29 +237,32 @@ class MCPClient:
                             if content_text[:1] in ['{', '[']:
                                 json_data = json.loads(content_text)
                                 logger.info(f"Parsed JSON from {tool_name}")
+                                # Return health check data directly
                                 if tool_name in ["get_server_health"]:
                                     return json_data
                                 else:
                                     print("call_tool("+tool_name+"):",json_data)
                                     print("convert_json_to_html_table(json_data):",convert_json_to_html_table(json_data))                                    
                                     return convert_json_to_html_table(json_data)
-                                    # return json_data
                             else:
                                 return content_text
 
                         except json.JSONDecodeError as json_err:
-                            logger.error(f"Failed to parse JSON from tool {tool_name}")
+                            logger.error(f"Failed to parse JSON from tool {tool_name}. Content: '{content_text[:200]}...'")
+                            logger.error(f"JSON decode error: {json_err}")
                             if content_text.startswith('{') or content_text.startswith('['):
                                 return {
                                     "error": f"Malformed JSON response: {str(json_err)}",
                                     "tool": tool_name,
                                     "raw_content": content_text[:500],
+                                    "content_type": "malformed_json"
                                 }
                             else:
                                 return {
                                     "result": content_text,
                                     "tool": tool_name,
                                     "content_type": "text",
+                                    "message": "Tool returned plain text instead of JSON"
                                 }
                 except Exception as e:
                     logger.error(f"MCP ClientSession error for tool {tool_name}: {e}")
@@ -566,13 +616,21 @@ async def list_tools():
 
 @app.post("/api/tools/{tool_name}")
 async def call_tool_direct(tool_name: str, params: Dict[str, Any] = None):
+    """Direct tool call endpoint"""
     try:
-        result = await mcp_client.call_tool(tool_name, params or {})
+        # Wrap parameters in 'request' key as expected by MCP server
+        wrapped_params = {"request": params} if params else {"request": {}}
+        
+        result = await mcp_client.call_tool(tool_name, wrapped_params)
         logger.info(f"Direct tool call result type: {type(result)}")
+        
+        # If the tool already returned a formatted HTML string, return as is
         if isinstance(result, str):
             return result
+        # If the result is a dict with an error from the tool call, pass through
         if isinstance(result, dict) and result.get("error") and result.get("tool"):
             return result
+        # Otherwise, return the result
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

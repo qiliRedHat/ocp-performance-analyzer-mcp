@@ -295,6 +295,13 @@ class ovnkLatencyELT(utilityELT):
             
             avg_val = pod_data.get('avg_value')
             latest_val = pod_data.get('latest_value')
+            node_name = pod_data.get('node_name', 'Unknown')
+            
+            # Get node role using utility method
+            role = self.get_node_role_from_labels(node_name) if node_name and node_name != 'Unknown' else 'worker'
+            
+            # Format metric name for display
+            metric_display = config.get('title', metric_name.replace('_', ' ').title())
             
             # Format values with highlighting
             avg_display = self.highlight_latency_value(avg_val, False) if avg_val is not None else 'N/A'
@@ -302,8 +309,10 @@ class ovnkLatencyELT(utilityELT):
             latest_display = self.highlight_latency_value(latest_val, False) if latest_val is not None else 'N/A'
             
             structured[table_key].append({
+                'Metric Name': metric_display,
                 'Pod Name': self.truncate_text(pod_name, 30),
-                'Node Name': self.truncate_node_name(pod_data.get('node_name', 'Unknown')),
+                'Node Name': self.truncate_node_name(node_name),
+                'Role': role.title(),
                 'Avg Latency': avg_display,
                 'Max Latency': max_display,
                 'Latest': latest_display,

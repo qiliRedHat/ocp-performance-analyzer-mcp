@@ -82,14 +82,22 @@ class ovsUsageELT(utilityELT):
                 # Pod-based metric
                 pod_name = key.split('@')[0]
                 node = node_mapping.get(pod_name, {}).get('node', 'Unknown') if node_mapping else 'Unknown'
-                # Infer role from key if node_mapping is empty
-                role = self._infer_role_from_name(key)
+                # Get role from node labels if we have a node, otherwise infer from key
+                if node and node != 'Unknown':
+                    role = self.get_node_role_from_labels(node)
+                else:
+                    role = self._infer_role_from_name(key)
             else:
                 # Node-based metric - key is the node name
                 node = key
                 pod_name = None
-                # Infer role from node name if node_mapping is empty
-                role = self._infer_role_from_name(node) if not node_mapping else node_mapping.get(node, {}).get('role', 'unknown')
+                # Get role from node labels if node_mapping is empty, otherwise use mapping
+                if not node_mapping:
+                    role = self.get_node_role_from_labels(node)
+                else:
+                    role = node_mapping.get(node, {}).get('role', 'unknown')
+                    if role == 'unknown':
+                        role = self.get_node_role_from_labels(node)
             
             max_val = float(stats.get('max', 0))
             avg_val = float(stats.get('avg', 0))
@@ -101,14 +109,21 @@ class ovsUsageELT(utilityELT):
         
         # Group by role and format
         for key, pod_name, node, role, max_val, avg_val, stats in all_values:
+            # Get role using utility method from node labels
+            role = self.get_node_role_from_labels(node) if node and node != 'Unknown' else role
             if role not in self.node_groups:
                 role = 'worker'  # Default
             
             table_key = f'{metric_name}_{role}'
             is_top = (max_val == top_max and max_val > 0)
             
+            # Format metric name for display
+            metric_display = metric_name.replace('_', ' ').title()
+            
             row = {
+                'Metric Name': metric_display,
                 'Node': self.truncate_node_name(node),
+                'Role': role.title(),
             }
             
             if pod_name:
@@ -137,11 +152,21 @@ class ovsUsageELT(utilityELT):
             if '@' in key:
                 pod_name = key.split('@')[0]
                 node = node_mapping.get(pod_name, {}).get('node', 'Unknown') if node_mapping else 'Unknown'
-                role = self._infer_role_from_name(key)
+                # Get role from node labels if we have a node, otherwise infer from key
+                if node and node != 'Unknown':
+                    role = self.get_node_role_from_labels(node)
+                else:
+                    role = self._infer_role_from_name(key)
             else:
                 node = key
                 pod_name = key  # For pod-based metrics, use the key as pod name
-                role = self._infer_role_from_name(node) if not node_mapping else node_mapping.get(node, {}).get('role', 'unknown')
+                # Get role from node labels if node_mapping is empty, otherwise use mapping
+                if not node_mapping:
+                    role = self.get_node_role_from_labels(node)
+                else:
+                    role = node_mapping.get(node, {}).get('role', 'unknown')
+                    if role == 'unknown':
+                        role = self.get_node_role_from_labels(node)
             
             # Convert bytes to GB for display
             max_val = float(stats.get('max', 0)) / (1024**3)
@@ -155,15 +180,26 @@ class ovsUsageELT(utilityELT):
         
         # Group by role and format
         for key, pod_name, node, role, max_val, avg_val, min_val in all_values:
+            # Get role using utility method from node labels
+            role = self.get_node_role_from_labels(node) if node and node != 'Unknown' else role
             if role not in self.node_groups:
                 role = 'worker'
             
             table_key = f'{metric_name}_{role}'
             is_top = (max_val == top_max and max_val > 0)
             
+            # Format metric name for display
+            metric_display = metric_name.replace('_', ' ').title()
+            
             row = {
+                'Metric Name': metric_display,
                 'Pod': self.truncate_text(pod_name, 30),
             }
+            
+            # Add Node and Role if we have node information
+            if node and node != 'Unknown':
+                row['Node'] = self.truncate_node_name(node)
+                row['Role'] = role.title()
             
             row['Avg (GB)'] = self.highlight_ovs_value(avg_val, metric_name, '', False)
             row['Max (GB)'] = self.highlight_ovs_value(max_val, metric_name, '', is_top)
@@ -198,7 +234,11 @@ class ovsUsageELT(utilityELT):
                 node = key
                 pod_name = key
             
-            role = self._infer_role_from_name(pod_name if pod_name else node)
+            # Get role from node labels if we have a node, otherwise infer from pod/node name
+            if node and node != 'Unknown':
+                role = self.get_node_role_from_labels(node)
+            else:
+                role = self._infer_role_from_name(pod_name if pod_name else node)
             max_val = float(stats.get('max', 0))
             avg_val = float(stats.get('avg', 0))
             
@@ -209,15 +249,26 @@ class ovsUsageELT(utilityELT):
         
         # Group by role and format
         for key, bridge, instance, pod_name, node, role, max_val, avg_val, stats in all_values:
+            # Get role using utility method from node labels
+            role = self.get_node_role_from_labels(node) if node and node != 'Unknown' else role
             if role not in self.node_groups:
                 role = 'worker'
             
             table_key = f'{metric_name}_{role}'
             is_top = (max_val == top_max and max_val > 0)
             
+            # Format metric name for display
+            metric_display = metric_name.replace('_', ' ').title()
+            
             row = {
+                'Metric Name': metric_display,
                 'Pod': self.truncate_text(pod_name, 30),
             }
+            
+            # Add Node and Role if we have node information
+            if node and node != 'Unknown':
+                row['Node'] = self.truncate_node_name(node)
+                row['Role'] = role.title()
             
             if bridge:
                 row['Bridge'] = bridge
@@ -249,7 +300,11 @@ class ovsUsageELT(utilityELT):
                 node = key
                 pod_name = key
             
-            role = self._infer_role_from_name(pod_name if pod_name else node)
+            # Get role from node labels if we have a node, otherwise infer from pod/node name
+            if node and node != 'Unknown':
+                role = self.get_node_role_from_labels(node)
+            else:
+                role = self._infer_role_from_name(pod_name if pod_name else node)
             max_val = float(stats.get('max', 0))
             avg_val = float(stats.get('avg', 0))
             
@@ -260,15 +315,26 @@ class ovsUsageELT(utilityELT):
         
         # Group by role and format
         for key, pod_name, node, role, max_val, avg_val, stats in all_values:
+            # Get role using utility method from node labels
+            role = self.get_node_role_from_labels(node) if node and node != 'Unknown' else role
             if role not in self.node_groups:
                 role = 'worker'
             
             table_key = f'{metric_name}_{role}'
             is_top = (max_val == top_max and max_val > 0)
             
+            # Format metric name for display
+            metric_display = metric_name.replace('_', ' ').title()
+            
             row = {
+                'Metric Name': metric_display,
                 'Pod': self.truncate_text(pod_name, 30),
             }
+            
+            # Add Node and Role if we have node information
+            if node and node != 'Unknown':
+                row['Node'] = self.truncate_node_name(node)
+                row['Role'] = role.title()
             
             row['Avg'] = self.highlight_ovs_value(avg_val, metric_name, unit, False)
             row['Max'] = self.highlight_ovs_value(max_val, metric_name, unit, is_top)
@@ -296,7 +362,11 @@ class ovsUsageELT(utilityELT):
                 node = key
                 pod_name = key
             
-            role = self._infer_role_from_name(pod_name if pod_name else node)
+            # Get role from node labels if we have a node, otherwise infer from pod/node name
+            if node and node != 'Unknown':
+                role = self.get_node_role_from_labels(node)
+            else:
+                role = self._infer_role_from_name(pod_name if pod_name else node)
             max_val = float(stats.get('max', 0))
             avg_val = float(stats.get('avg', 0))
             
@@ -307,15 +377,26 @@ class ovsUsageELT(utilityELT):
         
         # Group by role and format
         for key, pod_name, node, role, max_val, avg_val, stats in all_values:
+            # Get role using utility method from node labels
+            role = self.get_node_role_from_labels(node) if node and node != 'Unknown' else role
             if role not in self.node_groups:
                 role = 'worker'
             
             table_key = f'{metric_name}_{role}'
             is_top = (max_val == top_max and max_val > 0)
             
+            # Format metric name for display
+            metric_display = metric_name.replace('_', ' ').title()
+            
             row = {
+                'Metric Name': metric_display,
                 'Pod': self.truncate_text(pod_name, 30),
             }
+            
+            # Add Node and Role if we have node information
+            if node and node != 'Unknown':
+                row['Node'] = self.truncate_node_name(node)
+                row['Role'] = role.title()
             
             row['Avg'] = self.highlight_ovs_value(avg_val, metric_name, unit, False)
             row['Max'] = self.highlight_ovs_value(max_val, metric_name, unit, is_top)
@@ -337,7 +418,8 @@ class ovsUsageELT(utilityELT):
         all_values = []
         for key, stats in metric_values.items():
             node = key
-            role = self._infer_role_from_name(node)
+            # Get role from node labels
+            role = self.get_node_role_from_labels(node)
             max_val = float(stats.get('max', 0))
             avg_val = float(stats.get('avg', 0))
             
@@ -348,14 +430,21 @@ class ovsUsageELT(utilityELT):
         
         # Group by role and format
         for node, role, max_val, avg_val, stats in all_values:
+            # Get role using utility method from node labels
+            role = self.get_node_role_from_labels(node) if node and node != 'Unknown' else role
             if role not in self.node_groups:
                 role = 'worker'
             
             table_key = f'{metric_name}_{role}'
             is_top = (max_val == top_max and max_val > 0)
             
+            # Format metric name for display
+            metric_display = metric_name.replace('_', ' ').title()
+            
             row = {
+                'Metric Name': metric_display,
                 'Node': self.truncate_node_name(node),
+                'Role': role.title(),
                 'Avg': self.highlight_ovs_value(avg_val, metric_name, unit, False),
                 'Max': self.highlight_ovs_value(max_val, metric_name, unit, is_top),
             }
@@ -383,7 +472,11 @@ class ovsUsageELT(utilityELT):
                 node = key
                 pod_name = None
             
-            role = self._infer_role_from_name(pod_name if pod_name else node)
+            # Get role from node labels if we have a node, otherwise infer from pod/node name
+            if node and node != 'Unknown':
+                role = self.get_node_role_from_labels(node)
+            else:
+                role = self._infer_role_from_name(pod_name if pod_name else node)
             max_val = float(stats.get('max', 0))
             avg_val = float(stats.get('avg', 0))
             
@@ -394,14 +487,21 @@ class ovsUsageELT(utilityELT):
         
         # Group by role and format
         for key, pod_name, node, role, max_val, avg_val, stats in all_values:
+            # Get role using utility method from node labels
+            role = self.get_node_role_from_labels(node) if node and node != 'Unknown' else role
             if role not in self.node_groups:
                 role = 'worker'
             
             table_key = f'{metric_name}_{role}'
             is_top = (max_val == top_max and max_val > 0)
             
+            # Format metric name for display
+            metric_display = metric_name.replace('_', ' ').title()
+            
             row = {
+                'Metric Name': metric_display,
                 'Node': self.truncate_node_name(node),
+                'Role': role.title(),
             }
             
             if pod_name:

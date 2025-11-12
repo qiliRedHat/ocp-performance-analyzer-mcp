@@ -190,6 +190,22 @@ class NetworkL1Collector:
             logger.warning(f"Unknown metric: {metric_name}")
             return {}
     
+    def _extract_full_node_name(self, instance: str) -> str:
+        """
+        Extract full node name from instance string.
+        Removes port suffix if present, returns full FQDN.
+        
+        Args:
+            instance: Instance string from Prometheus (may include port)
+            
+        Returns:
+            Full node name without port
+        """
+        # Remove port suffix if present (e.g., "node.example.com:9100" -> "node.example.com")
+        if ':' in instance:
+            instance = instance.split(':')[0]
+        return instance
+    
     async def get_network_up_status(self, nodes: List[Dict], role: str) -> Dict[str, Any]:
         """Get network operational status (Yes/No) for each node"""
         try:
@@ -208,22 +224,31 @@ class NetworkL1Collector:
                 query = f'node_network_up{{instance=~"{node_name}.*",job="node-exporter"}}'
                 result = await self.prometheus_client.query_instant(query)
                 
-                node_data = {
-                    "interfaces": {}
-                }
+                # Track full node names from Prometheus results
+                node_data_by_full_name = {}
                 
                 if 'result' in result and result['result']:
                     for item in result['result']:
                         metric = item.get('metric', {})
+                        instance = metric.get('instance', '')
+                        full_node_name = self._extract_full_node_name(instance)
                         device = metric.get('device', 'unknown')
                         value = item.get('value', [None, '0'])[1]
                         
+                        # Initialize node data if not exists
+                        if full_node_name not in node_data_by_full_name:
+                            node_data_by_full_name[full_node_name] = {
+                                "interfaces": {}
+                            }
+                        
                         try:
-                            node_data["interfaces"][device] = "Yes" if float(value) == 1 else "No"
+                            node_data_by_full_name[full_node_name]["interfaces"][device] = "Yes" if float(value) == 1 else "No"
                         except (ValueError, TypeError):
-                            node_data["interfaces"][device] = "No"
+                            node_data_by_full_name[full_node_name]["interfaces"][device] = "No"
                 
-                result_data["nodes"][node_name] = node_data
+                # Add all full node names to result
+                for full_node_name, node_data in node_data_by_full_name.items():
+                    result_data["nodes"][full_node_name] = node_data
             
             return result_data
             
@@ -249,21 +274,30 @@ class NetworkL1Collector:
                 query = f'node_network_carrier{{instance=~"{node_name}.*",job="node-exporter"}}'
                 result = await self.prometheus_client.query_instant(query)
                 
-                node_data = {
-                    "status": "No",
-                    "interfaces": {}
-                }
+                # Track full node names from Prometheus results
+                node_data_by_full_name = {}
                 
                 if 'result' in result and result['result']:
-                    node_data["status"] = "Yes"
                     for item in result['result']:
                         metric = item.get('metric', {})
+                        instance = metric.get('instance', '')
+                        full_node_name = self._extract_full_node_name(instance)
                         device = metric.get('device', 'unknown')
                         value = item.get('value', [None, '0'])[1]
                         
-                        node_data["interfaces"][device] = "Yes" if float(value) == 1 else "No"
+                        # Initialize node data if not exists
+                        if full_node_name not in node_data_by_full_name:
+                            node_data_by_full_name[full_node_name] = {
+                                "status": "No",
+                                "interfaces": {}
+                            }
+                        
+                        node_data_by_full_name[full_node_name]["status"] = "Yes"
+                        node_data_by_full_name[full_node_name]["interfaces"][device] = "Yes" if float(value) == 1 else "No"
                 
-                result_data["nodes"][node_name] = node_data
+                # Add all full node names to result
+                for full_node_name, node_data in node_data_by_full_name.items():
+                    result_data["nodes"][full_node_name] = node_data
             
             return result_data
             
@@ -289,29 +323,35 @@ class NetworkL1Collector:
                 query = f'node_network_speed_bytes{{instance=~"{node_name}.*",job="node-exporter"}} * 8'
                 result = await self.prometheus_client.query_instant(query)
                 
-                node_data = {
-                    "max_speed": 0,
-                    "interfaces": {}
-                }
+                # Track full node names from Prometheus results
+                node_data_by_full_name = {}
                 
                 if 'result' in result and result['result']:
-                    max_speed = 0
                     for item in result['result']:
                         metric = item.get('metric', {})
+                        instance = metric.get('instance', '')
+                        full_node_name = self._extract_full_node_name(instance)
                         device = metric.get('device', 'unknown')
                         value = item.get('value', [None, '0'])[1]
                         
+                        # Initialize node data if not exists
+                        if full_node_name not in node_data_by_full_name:
+                            node_data_by_full_name[full_node_name] = {
+                                "max_speed": 0,
+                                "interfaces": {}
+                            }
+                        
                         try:
                             speed = float(value)
-                            node_data["interfaces"][device] = speed
-                            if speed > max_speed:
-                                max_speed = speed
+                            node_data_by_full_name[full_node_name]["interfaces"][device] = speed
+                            if speed > node_data_by_full_name[full_node_name]["max_speed"]:
+                                node_data_by_full_name[full_node_name]["max_speed"] = speed
                         except (ValueError, TypeError):
-                            node_data["interfaces"][device] = 0
-                    
-                    node_data["max_speed"] = max_speed
+                            node_data_by_full_name[full_node_name]["interfaces"][device] = 0
                 
-                result_data["nodes"][node_name] = node_data
+                # Add all full node names to result
+                for full_node_name, node_data in node_data_by_full_name.items():
+                    result_data["nodes"][full_node_name] = node_data
             
             return result_data
             
@@ -337,29 +377,35 @@ class NetworkL1Collector:
                 query = f'node_network_mtu_bytes{{instance=~"{node_name}.*",job="node-exporter"}}'
                 result = await self.prometheus_client.query_instant(query)
                 
-                node_data = {
-                    "max_mtu": 0,
-                    "interfaces": {}
-                }
+                # Track full node names from Prometheus results
+                node_data_by_full_name = {}
                 
                 if 'result' in result and result['result']:
-                    max_mtu = 0
                     for item in result['result']:
                         metric = item.get('metric', {})
+                        instance = metric.get('instance', '')
+                        full_node_name = self._extract_full_node_name(instance)
                         device = metric.get('device', 'unknown')
                         value = item.get('value', [None, '0'])[1]
                         
+                        # Initialize node data if not exists
+                        if full_node_name not in node_data_by_full_name:
+                            node_data_by_full_name[full_node_name] = {
+                                "max_mtu": 0,
+                                "interfaces": {}
+                            }
+                        
                         try:
                             mtu = float(value)
-                            node_data["interfaces"][device] = mtu
-                            if mtu > max_mtu:
-                                max_mtu = mtu
+                            node_data_by_full_name[full_node_name]["interfaces"][device] = mtu
+                            if mtu > node_data_by_full_name[full_node_name]["max_mtu"]:
+                                node_data_by_full_name[full_node_name]["max_mtu"] = mtu
                         except (ValueError, TypeError):
-                            node_data["interfaces"][device] = 0
-                    
-                    node_data["max_mtu"] = max_mtu
+                            node_data_by_full_name[full_node_name]["interfaces"][device] = 0
                 
-                result_data["nodes"][node_name] = node_data
+                # Add all full node names to result
+                for full_node_name, node_data in node_data_by_full_name.items():
+                    result_data["nodes"][full_node_name] = node_data
             
             return result_data
             
@@ -388,15 +434,22 @@ class NetworkL1Collector:
                 query = f'node_arp_entries{{instance=~"{node_name}.*",job="node-exporter"}}'
                 result = await self.prometheus_client.query_range(query, start, end, step='15s')
                 
-                node_data = {
-                    "interfaces": {}
-                }
+                # Track full node names from Prometheus results
+                node_data_by_full_name = {}
                 
                 if 'result' in result and result['result']:
                     for item in result['result']:
                         metric = item.get('metric', {})
+                        instance = metric.get('instance', '')
+                        full_node_name = self._extract_full_node_name(instance)
                         device = metric.get('device', 'unknown')
                         values = item.get('values', [])
+                        
+                        # Initialize node data if not exists
+                        if full_node_name not in node_data_by_full_name:
+                            node_data_by_full_name[full_node_name] = {
+                                "interfaces": {}
+                            }
                         
                         # Extract numeric values from time series
                         numeric_values = []
@@ -407,18 +460,20 @@ class NetworkL1Collector:
                                 continue
                         
                         if numeric_values:
-                            node_data["interfaces"][device] = {
+                            node_data_by_full_name[full_node_name]["interfaces"][device] = {
                                 "avg": round(sum(numeric_values) / len(numeric_values)),
                                 "max": round(max(numeric_values))
                             }
                         else:
-                            node_data["interfaces"][device] = {
+                            node_data_by_full_name[full_node_name]["interfaces"][device] = {
                                 "avg": 0,
                                 "max": 0
                             }
                 
-                if node_data["interfaces"]:  # Only add node if it has interfaces
-                    result_data["nodes"][node_name] = node_data
+                # Add all full node names to result
+                for full_node_name, node_data in node_data_by_full_name.items():
+                    if node_data["interfaces"]:  # Only add node if it has interfaces
+                        result_data["nodes"][full_node_name] = node_data
             
             return result_data
             

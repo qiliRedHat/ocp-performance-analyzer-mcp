@@ -138,21 +138,23 @@ class podsUsageELT(utilityELT):
             node_name = container_data.get('node_name', 'unknown')
             stats = container_data.get('stats', {})
             
+            # Get node role using utility method
+            role = self.get_node_role_from_labels(node_name)
+            
             is_top = (max_val == top_max and max_val > 0)
             
             # Format values
             avg_display = self.format_and_highlight(avg_val, 'percent', thresholds, False)
             max_display = self.format_and_highlight(max_val, 'percent', thresholds, is_top)
-            min_display = self.format_percentage(stats.get('min_percent', 0))
             latest_display = self.format_percentage(stats.get('latest_percent', 0))
             
             structured[table_key].append({
                 'Pod': self.truncate_text(pod_name, 30),
                 'Container': container_name if container_name else 'N/A',
                 'Node': self.truncate_node_name(node_name),
+                'Role': role.title(),
                 'Avg %': avg_display,
                 'Max %': max_display,
-                'Min %': min_display,
                 'Latest %': latest_display,
                 'Data Points': stats.get('data_points', 0)
             })
@@ -185,13 +187,14 @@ class podsUsageELT(utilityELT):
             node_name = container_data.get('node_name', 'unknown')
             stats = container_data.get('stats', {})
             
+            # Get node role using utility method
+            role = self.get_node_role_from_labels(node_name)
+            
             is_top = (max_val == top_max and max_val > 0)
             
             # Format values with units
             avg_display = self.format_and_highlight(avg_val, 'bytes', thresholds, False)
             max_display = self.format_and_highlight(max_val, 'bytes', thresholds, is_top)
-            min_val = self._convert_to_bytes(stats.get('min_value', 0), stats.get('min_unit', 'B'))
-            min_display = self.format_value_with_unit(min_val, 'bytes')
             latest_val = self._convert_to_bytes(stats.get('latest_value', 0), stats.get('latest_unit', 'B'))
             latest_display = self.format_value_with_unit(latest_val, 'bytes')
             
@@ -199,9 +202,9 @@ class podsUsageELT(utilityELT):
                 'Pod': self.truncate_text(pod_name, 30),
                 'Container': container_name if container_name else 'N/A',
                 'Node': self.truncate_node_name(node_name),
+                'Role': role.title(),
                 'Avg': avg_display,
                 'Max': max_display,
-                'Min': min_display,
                 'Latest': latest_display,
                 'Data Points': stats.get('data_points', 0)
             })
@@ -234,13 +237,14 @@ class podsUsageELT(utilityELT):
             node_name = container_data.get('node_name', 'unknown')
             stats = container_data.get('stats', {})
             
+            # Get node role using utility method
+            role = self.get_node_role_from_labels(node_name)
+            
             is_top = (max_val == top_max and max_val > 0)
             
             # Format values with units
             avg_display = self.format_and_highlight(avg_val, 'bytes', thresholds, False)
             max_display = self.format_and_highlight(max_val, 'bytes', thresholds, is_top)
-            min_val = self._convert_to_bytes(stats.get('min_value', 0), stats.get('min_unit', 'B'))
-            min_display = self.format_value_with_unit(min_val, 'bytes')
             latest_val = self._convert_to_bytes(stats.get('latest_value', 0), stats.get('latest_unit', 'B'))
             latest_display = self.format_value_with_unit(latest_val, 'bytes')
             
@@ -248,9 +252,9 @@ class podsUsageELT(utilityELT):
                 'Pod': self.truncate_text(pod_name, 30),
                 'Container': container_name if container_name else 'N/A',
                 'Node': self.truncate_node_name(node_name),
+                'Role': role.title(),
                 'Avg': avg_display,
                 'Max': max_display,
-                'Min': min_display,
                 'Latest': latest_display,
                 'Data Points': stats.get('data_points', 0)
             })

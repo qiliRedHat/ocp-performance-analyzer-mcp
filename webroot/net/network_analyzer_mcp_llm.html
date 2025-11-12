@@ -607,7 +607,7 @@
                     onclick="sendQuickMessage('Show me network socket udp statics information in current openshift cluster')">💾
                     Network Socket UDP</button>
                 <button class="action-button"
-                    onclick="sendQuickMessage('Show me network socket memory information in current openshift cluster')">🔄
+                    onclick="sendQuickMessage('Show me network socket memory information in current openshift cluster')">📄
                     Netowrk Socket Memory</button>
                 <button class="action-button"
                     onclick="sendQuickMessage('Show me network socket softnet information in current openshift cluster')">🔗
@@ -619,10 +619,10 @@
                     onclick="sendQuickMessage('Show me network netstat tcp in current openshift cluster')">🌐
                     Netstat TCP</button>
                 <button class="action-button"
-                    onclick="sendQuickMessage('Show me network netstat UDP in current openshift cluster')">🔍
+                    onclick="sendQuickMessage('Show me network netstat UDP in current openshift cluster')">📡
                     Netstat UDP</button>
                 <button class="action-button"
-                    onclick="sendQuickMessage('Show me node level network io in current openshift cluster')">🔍
+                    onclick="sendQuickMessage('Show me node level network io in current openshift cluster')">📡
                     Node Network IO</button>
                 <button class="action-button" onclick="toggleSystemPromptModal()">⚙️ Configure AI Behavior</button>
             </div>
@@ -650,7 +650,7 @@
             <div class="chat-container">
                 <div class="messages" id="messages">
                     <div class="welcome-message">
-                        <h3>Welcome to OpenShift ETCD Analyzer AI Assistant</h3>
+                        <h3>Welcome to OpenShift Network Analyzer AI Assistant</h3>
                         <p>I can help you analyze your OpenShift cluster performance, check system health, and provide
                             insights about your infrastructure using advanced AI and comprehensive monitoring tools.</p>
                         <div class="suggestions">
@@ -720,18 +720,14 @@
             } catch (e) { return text; }
         }
 
-        // Fix common mojibake (UTF-8 shown as Latin-1) like "ð" safely
         function fixMojibake(text) {
             try {
                 if (!text || typeof text !== 'string') return text;
-                // Heuristic: attempt fix only when typical mojibake lead bytes appear
-                const maybeMojibake = /[ÃÂâð]/.test(text);
+                const maybeMojibake = /[ÃƒÃ‚Ã¢Ã°]/.test(text);
                 if (!maybeMojibake) return text;
                 try {
-                    // Reinterpret string bytes as UTF-8
                     return decodeURIComponent(escape(text));
                 } catch (e) {
-                    // Fallback: latin1 -> utf8 via TextDecoder
                     try {
                         const bytes = Uint8Array.from(Array.from(text, c => c.charCodeAt(0) & 0xFF));
                         return new TextDecoder('utf-8').decode(bytes);
@@ -1019,7 +1015,7 @@
                     const contentType = response.headers.get('content-type');
                     if (!contentType || !contentType.includes('application/json')) {
                         const text = await response.text();
-                        throw new Error(`Expected JSON response but got ${contentType}`);
+                        throw new Error(`Expected JSON response but got ${contentType}. Response: ${text.substring(0, 200)}`);
                     }
 
                     const health = await response.json();
@@ -1063,30 +1059,39 @@
                     const contentType = clusterResponse.headers.get('content-type');
                     if (!contentType || !contentType.includes('application/json')) {
                         const text = await clusterResponse.text();
-                        throw new Error(`Expected JSON response but got ${contentType}`);
+                        throw new Error(`Expected JSON response but got ${contentType}. Response: ${text.substring(0, 200)}`);
                     }
 
                     const clusterHealth = await clusterResponse.json();
                     console.log('Cluster health response:', clusterHealth);
 
-                    const overallStatus = clusterHealth.status || 'unknown';
+                    // Look for cluster health in the details object
                     const healthDetails = clusterHealth.details || {};
-                    const detailsStatus = healthDetails.overall_health || healthDetails.status || 'unknown';
+                    const overallStatus = healthDetails.overall_cluster_health ||
+                        healthDetails.health_details?.overall_cluster_health ||
+                        healthDetails.status ||
+                        clusterHealth.status ||
+                        'unknown';
+
                     const collectorsInitialized = healthDetails.collectors_initialized || false;
                     const toolsAvailable = healthDetails.tools_available || 0;
+                    const prometheusConnection = healthDetails.prometheus_connection || 'unknown';
 
-                    console.log('Overall status:', overallStatus, 'Details status:', detailsStatus);
+                    console.log('Overall status:', overallStatus, 'Collectors:', collectorsInitialized, 'Tools:', toolsAvailable);
 
-                    const finalStatus = detailsStatus !== 'unknown' ? detailsStatus : overallStatus;
-
-                    if (finalStatus === 'healthy' && collectorsInitialized) {
+                    // Determine cluster status based on multiple factors
+                    if (overallStatus === 'healthy' && collectorsInitialized) {
                         this.updateClusterStatus('connected', `Cluster Healthy (${toolsAvailable} tools)`);
-                    } else if (finalStatus === 'healthy') {
+                    } else if (overallStatus === 'healthy') {
                         this.updateClusterStatus('connected', 'Cluster Healthy');
-                    } else if (finalStatus === 'unknown') {
+                    } else if (overallStatus === 'partial' && collectorsInitialized) {
+                        this.updateClusterStatus('checking', `Cluster Partial (${toolsAvailable} tools)`);
+                    } else if (overallStatus === 'partial') {
+                        this.updateClusterStatus('checking', 'Cluster Status Partial');
+                    } else if (overallStatus === 'unknown') {
                         this.updateClusterStatus('checking', 'Cluster Status Unknown');
                     } else {
-                        this.updateClusterStatus('disconnected', `Cluster ${finalStatus}`);
+                        this.updateClusterStatus('disconnected', 'Cluster Issues Detected');
                     }
                 } catch (e) {
                     console.error('Cluster health check failed:', e);
