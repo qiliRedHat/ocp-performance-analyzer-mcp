@@ -22,7 +22,7 @@ class nodeHealthELT(utilityELT):
             'p99_kubelet_pleg_relist_duration': {
                 'title': 'PLEG Relist Duration (P99)',
                 'unit': 'second',
-                'thresholds': {'critical': 1.0, 'warning': 0.1}  # seconds
+                'thresholds': {'critical': 180.0, 'warning': 10.0}  # seconds (3 minutes, 10 seconds)
             }
         }
 
@@ -132,13 +132,12 @@ class nodeHealthELT(utilityELT):
             role = self._get_node_role(node_name, node_role_map)
             table_key = f'p99_kubelet_pleg_relist_duration_{role}'
 
-            # Convert from seconds to milliseconds
-            p99_val = float(node_data.get('p99', 0)) * 1000
-            max_val = float(node_data.get('max', 0)) * 1000
-            min_val = float(node_data.get('min', 0)) * 1000
-            unit = 'ms'
+            p99_val = float(node_data.get('p99', 0))
+            max_val = float(node_data.get('max', 0))
+            min_val = float(node_data.get('min', 0))
+            unit = node_data.get('unit', 'second')
 
-            is_top = (p99_val == top_p99 * 1000 and p99_val > 0)
+            is_top = (p99_val == top_p99 and p99_val > 0)
 
             structured[table_key].append({
                 'Node': self.truncate_node_name(node_name),
@@ -153,29 +152,25 @@ class nodeHealthELT(utilityELT):
     def _format_pleg_latency(self, value: float, is_top: bool = False) -> str:
         """Format PLEG latency value with thresholds and top highlighting
 
-        Normal: < 100ms
-        Warning: 100ms - 1000ms
-        Critical: > 1000ms
+        Normal: < 10s
+        Warning: 10s - 180s (3 minutes)
+        Critical: > 180s (3 minutes)
 
         Args:
-            value: Latency in milliseconds
+            value: Latency in seconds
             is_top: If True, this is the highest (worst) latency
         """
-        # Convert threshold from seconds to milliseconds
-        thresholds_ms = {
-            'critical': self.metric_configs['p99_kubelet_pleg_relist_duration']['thresholds']['critical'] * 1000,
-            'warning': self.metric_configs['p99_kubelet_pleg_relist_duration']['thresholds']['warning'] * 1000
-        }
+        thresholds = self.metric_configs['p99_kubelet_pleg_relist_duration']['thresholds']
 
         if is_top:
             # Highest latency = worst performance, use alert icon with danger styling
-            return f'<span class="text-danger font-weight-bold bg-warning-light px-1">🔺 {value:.2f}ms</span>'
-        elif value >= thresholds_ms['critical']:
-            return f'<span class="text-danger font-weight-bold">⚠️ {value:.2f}ms</span>'
-        elif value >= thresholds_ms['warning']:
-            return f'<span class="text-warning font-weight-bold">{value:.2f}ms</span>'
+            return f'<span class="text-danger font-weight-bold bg-warning-light px-1">🔺 {value:.4f}s</span>'
+        elif value >= thresholds['critical']:
+            return f'<span class="text-danger font-weight-bold">⚠️ {value:.4f}s</span>'
+        elif value >= thresholds['warning']:
+            return f'<span class="text-warning font-weight-bold">{value:.4f}s</span>'
         else:
-            return f'<span class="text-success">{value:.2f}ms</span>'
+            return f'<span class="text-success">{value:.4f}s</span>'
 
     def _generate_overview(self, data: Dict[str, Any], 
                         structured: Dict[str, Any],
@@ -195,12 +190,11 @@ class nodeHealthELT(utilityELT):
             top_nodes = top_nodes_info.get('nodes', [])
             if top_nodes:
                 top_node = top_nodes[0]
-                latency_ms = top_node.get('p99_latency', 0) * 1000
                 structured['overview'].append({
                     'Metric': 'Top PLEG Latency',
                     'Node': self.truncate_node_name(top_node.get('node', '')),
                     'Role': top_node.get('role', '').title(),
-                    'Value': f"{latency_ms:.2f}ms",
+                    'Value': f"{top_node.get('p99_latency', 0):.4f}s",
                     'Status': self._get_pleg_status(top_node.get('p99_latency', 0))
                 })
 
@@ -246,12 +240,11 @@ class nodeHealthELT(utilityELT):
             # Sort by p99_latency descending
             all_pleg_nodes.sort(key=lambda x: x.get('p99_latency', 0), reverse=True)
             top_node = all_pleg_nodes[0]
-            latency_ms = top_node.get('p99_latency', 0) * 1000
             structured['overview'].append({
                 'Metric': 'Highest PLEG Latency',
                 'Node': self.truncate_node_name(top_node.get('node', '')),
                 'Role': top_node.get('role', '').title(),
-                'Value': f"{latency_ms:.2f}ms",
+                'Value': f"{top_node.get('p99_latency', 0):.4f}s",
                 'Status': self._get_pleg_status(top_node.get('p99_latency', 0))
             })
 
@@ -334,9 +327,9 @@ class nodeHealthELT(utilityELT):
 
             # Health interpretation
             summary_items.append("<li><strong>PLEG Latency Thresholds:</strong></li>")
-            summary_items.append("<li style='margin-left: 20px;'>✅ Normal: &lt; 100ms</li>")
-            summary_items.append("<li style='margin-left: 20px;'>⚠️ Warning: 100ms - 1000ms</li>")
-            summary_items.append("<li style='margin-left: 20px;'>🔴 Critical: &gt; 1000ms</li>")
+            summary_items.append("<li style='margin-left: 20px;'>✅ Normal: &lt; 10s</li>")
+            summary_items.append("<li style='margin-left: 20px;'>⚠️ Warning: 10s - 180s (3 minutes)</li>")
+            summary_items.append("<li style='margin-left: 20px;'>🔴 Critical: &gt; 180s (3 minutes)</li>")
 
             return (
                 "<div class=\"node-health-summary\">"
