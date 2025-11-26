@@ -12,7 +12,8 @@ Modular Architecture:
   ├── health_check.py - Health status
   ├── cluster_info.py - OCP cluster info
   ├── node_usage.py - Node resource metrics
-  └── node_health.py - Node health metrics (PLEG)
+  ├── node_pleg_relist.py - Node PLEG relist latency metrics
+  └── node_kubelet_runtime_operations_errors.py - Kubelet runtime operations errors
 """
 
 import os
@@ -83,13 +84,14 @@ auth_manager = None
 config = None
 cluster_info_collector = None
 node_usage_collector = None
-node_health_collector = None
+pleg_relist_collector = None
+kubelet_runtime_operations_errors_collector = None
 
 # ==================== Initialization ====================
 
 async def initialize_collectors():
     """Initialize all collectors with authentication - each loads its own metrics"""
-    global auth_manager, config, cluster_info_collector, node_usage_collector, node_health_collector
+    global auth_manager, config, cluster_info_collector, node_usage_collector, pleg_relist_collector, kubelet_runtime_operations_errors_collector
 
     try:
         logger.info("="*70)
@@ -114,14 +116,15 @@ async def initialize_collectors():
         # Import collector modules
         from tools.ocp.cluster_info import ClusterInfoCollector
         from tools.node.node_usage import nodeUsageCollector
-        from tools.node.node_health import nodeHealthCollector
-        
+        from tools.node.node_pleg_relist import plegRelistCollector
+        from tools.node.node_kubelet_runtime_operations_errors import kubeletRuntimeOperationsErrorsCollector
+
         # OCP Cluster Info Collector
         logger.info("Initializing ClusterInfoCollector...")
         cluster_info_collector = ClusterInfoCollector()
         await cluster_info_collector.initialize()
         logger.info("✅ ClusterInfoCollector initialized")
-        
+
         # Node Usage Collector
         logger.info("Initializing nodeUsageCollector...")
         prometheus_config = {
@@ -131,11 +134,16 @@ async def initialize_collectors():
         }
         node_usage_collector = nodeUsageCollector(auth_manager, prometheus_config)
         logger.info("✅ nodeUsageCollector initialized (uses node metrics)")
-        
-        # Node Health Collector
-        logger.info("Initializing nodeHealthCollector...")
-        node_health_collector = nodeHealthCollector(auth_manager, prometheus_config)
-        logger.info("✅ nodeHealthCollector initialized (uses node health metrics)")
+
+        # PLEG Relist Collector
+        logger.info("Initializing plegRelistCollector...")
+        pleg_relist_collector = plegRelistCollector(auth_manager, prometheus_config)
+        logger.info("✅ plegRelistCollector initialized (uses PLEG metrics)")
+
+        # Runtime Operations Errors Collector
+        logger.info("Initializing kubeletRuntimeOperationsErrorsCollector...")
+        kubelet_runtime_operations_errors_collector = kubeletRuntimeOperationsErrorsCollector(auth_manager, prometheus_config)
+        logger.info("✅ kubeletRuntimeOperationsErrorsCollector initialized (uses runtime error metrics)")
         
         logger.info("-" * 70)
         logger.info("✅ All collectors initialized successfully!")
@@ -157,7 +165,8 @@ def get_global_components():
         'config': config,
         'cluster_info_collector': cluster_info_collector,
         'node_usage_collector': node_usage_collector,
-        'node_health_collector': node_health_collector
+        'pleg_relist_collector': pleg_relist_collector,
+        'kubelet_runtime_operations_errors_collector': kubelet_runtime_operations_errors_collector
     }
 
 # ==================== Import and Register MCP Tools ====================
@@ -165,14 +174,16 @@ def get_global_components():
 from mcp_tools.health_check import register_health_check_tool
 from mcp_tools.cluster_info import register_cluster_info_tool
 from mcp_tools.node_usage import register_node_usage_tool
-from mcp_tools.node_health import register_node_health_tool
+from mcp_tools.node_pleg_relist import register_pleg_relist_tool
+from mcp_tools.node_kubelet_runtime_operations_errors import register_runtime_errors_tool
 
 # Register all tools
 logger.info("Registering MCP tools...")
 register_health_check_tool(mcp, get_global_components)
 register_cluster_info_tool(mcp, get_global_components)
 register_node_usage_tool(mcp, get_global_components)
-register_node_health_tool(mcp, get_global_components)
+register_pleg_relist_tool(mcp, get_global_components)
+register_runtime_errors_tool(mcp, get_global_components)
 logger.info("✅ All MCP tools registered")
 
 # ==================== Startup and Main ====================
@@ -195,7 +206,8 @@ async def startup_event():
         logger.info("  1. get_server_health - Health checks and status")
         logger.info("  2. get_ocp_cluster_info - Cluster information")
         logger.info("  3. get_ocp_node_usage - Node resource usage (CPU, memory, cgroup)")
-        logger.info("  4. get_etcd_node_health - Node health metrics (PLEG latency)")
+        logger.info("  4. get_ocp_node_pleg_latency - PLEG latency metrics")
+        logger.info("  5. get_ocp_node_runtime_errors - Kubelet runtime operations errors")
         logger.info("")
 
 

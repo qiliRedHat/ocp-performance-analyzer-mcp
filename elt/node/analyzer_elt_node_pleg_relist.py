@@ -1,11 +1,9 @@
 """
-Extract, Load, Transform module for Node Health Metrics
-Handles node health data from tools/node/node_health.py
-ONLY contains node_health specific logic - no generic utilities
+Extract, Load, Transform module for Node PLEG Relist Metrics
+Handles PLEG relist latency data from tools/node/node_pleg_relist.py
 """
 
 import logging
-import re
 from typing import Dict, Any, List
 import pandas as pd
 from ..utils.analyzer_elt_utility import utilityELT
@@ -13,8 +11,8 @@ from ..utils.analyzer_elt_utility import utilityELT
 logger = logging.getLogger(__name__)
 
 
-class nodeHealthELT(utilityELT):
-    """Extract, Load, Transform class for node health metrics data"""
+class nodePlegRelistELT(utilityELT):
+    """Extract, Load, Transform class for PLEG relist latency metrics data"""
 
     def __init__(self):
         super().__init__()
@@ -22,12 +20,12 @@ class nodeHealthELT(utilityELT):
             'p99_kubelet_pleg_relist_duration': {
                 'title': 'PLEG Relist Duration (P99)',
                 'unit': 'second',
-                'thresholds': {'critical': 1.0, 'warning': 0.1}  # seconds
+                'thresholds': {'critical': 180.0, 'warning': 10.0}  # seconds (3 minutes, 10 seconds)
             }
         }
 
-    def extract_node_health(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract node health information from node_health.py output
+    def extract_pleg_relist(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract PLEG relist latency information from node_pleg_relist.py output
 
         Handles structure with node_groups containing PLEG relist latency
         """
@@ -37,8 +35,7 @@ class nodeHealthELT(utilityELT):
         if 'data' in data and isinstance(data.get('data'), dict) and 'node_groups' not in data:
             actual_data = data['data']
 
-        # Log for debugging
-        logger.debug(f"Extracting node health, actual_data keys: {list(actual_data.keys())}")
+        logger.debug(f"Extracting PLEG relist, actual_data keys: {list(actual_data.keys())}")
         logger.debug(f"Has node_groups: {'node_groups' in actual_data}")
 
         structured = {
@@ -48,7 +45,7 @@ class nodeHealthELT(utilityELT):
             'time_range': {},
         }
 
-        # Initialize role-based tables for each metric
+        # Initialize role-based tables for PLEG metric
         for role in ['controlplane', 'infra', 'worker', 'workload']:
             structured[f'p99_kubelet_pleg_relist_duration_{role}'] = []
 
@@ -59,7 +56,6 @@ class nodeHealthELT(utilityELT):
             # Process each node group (controlplane, infra, workload, worker)
             for group_name, group_data in node_groups.items():
                 if group_data.get('status') != 'success':
-                    # Skip error groups (e.g., "No infra nodes found")
                     logger.debug(f"Skipping {group_name} group: {group_data.get('error', 'unknown error')}")
                     continue
 
@@ -106,8 +102,8 @@ class nodeHealthELT(utilityELT):
 
         return structured
 
-    def _extract_pleg_relist_duration(self, metric_data: Dict[str, Any], 
-                                    structured: Dict[str, Any], 
+    def _extract_pleg_relist_duration(self, metric_data: Dict[str, Any],
+                                    structured: Dict[str, Any],
                                     node_role_map: Dict[str, str]):
         """Extract PLEG relist duration metrics grouped by role"""
 
@@ -132,13 +128,12 @@ class nodeHealthELT(utilityELT):
             role = self._get_node_role(node_name, node_role_map)
             table_key = f'p99_kubelet_pleg_relist_duration_{role}'
 
-            # Convert from seconds to milliseconds
-            p99_val = float(node_data.get('p99', 0)) * 1000
-            max_val = float(node_data.get('max', 0)) * 1000
-            min_val = float(node_data.get('min', 0)) * 1000
-            unit = 'ms'
+            p99_val = float(node_data.get('p99', 0))
+            max_val = float(node_data.get('max', 0))
+            min_val = float(node_data.get('min', 0))
+            unit = node_data.get('unit', 'second')
 
-            is_top = (p99_val == top_p99 * 1000 and p99_val > 0)
+            is_top = (p99_val == top_p99 and p99_val > 0)
 
             structured[table_key].append({
                 'Node': self.truncate_node_name(node_name),
@@ -153,34 +148,30 @@ class nodeHealthELT(utilityELT):
     def _format_pleg_latency(self, value: float, is_top: bool = False) -> str:
         """Format PLEG latency value with thresholds and top highlighting
 
-        Normal: < 100ms
-        Warning: 100ms - 1000ms
-        Critical: > 1000ms
+        Normal: < 10s
+        Warning: 10s - 180s (3 minutes)
+        Critical: > 180s (3 minutes)
 
         Args:
-            value: Latency in milliseconds
+            value: Latency in seconds
             is_top: If True, this is the highest (worst) latency
         """
-        # Convert threshold from seconds to milliseconds
-        thresholds_ms = {
-            'critical': self.metric_configs['p99_kubelet_pleg_relist_duration']['thresholds']['critical'] * 1000,
-            'warning': self.metric_configs['p99_kubelet_pleg_relist_duration']['thresholds']['warning'] * 1000
-        }
+        thresholds = self.metric_configs['p99_kubelet_pleg_relist_duration']['thresholds']
 
         if is_top:
             # Highest latency = worst performance, use alert icon with danger styling
-            return f'<span class="text-danger font-weight-bold bg-warning-light px-1">🔺 {value:.2f}ms</span>'
-        elif value >= thresholds_ms['critical']:
-            return f'<span class="text-danger font-weight-bold">⚠️ {value:.2f}ms</span>'
-        elif value >= thresholds_ms['warning']:
-            return f'<span class="text-warning font-weight-bold">{value:.2f}ms</span>'
+            return f'<span class="text-danger font-weight-bold bg-warning-light px-1">🔺 {value:.4f}s</span>'
+        elif value >= thresholds['critical']:
+            return f'<span class="text-danger font-weight-bold">⚠️ {value:.4f}s</span>'
+        elif value >= thresholds['warning']:
+            return f'<span class="text-warning font-weight-bold">{value:.4f}s</span>'
         else:
-            return f'<span class="text-success">{value:.2f}ms</span>'
+            return f'<span class="text-success">{value:.4f}s</span>'
 
-    def _generate_overview(self, data: Dict[str, Any], 
+    def _generate_overview(self, data: Dict[str, Any],
                         structured: Dict[str, Any],
                         node_role_map: Dict[str, str]):
-        """Generate node health overview"""
+        """Generate PLEG overview"""
         # Count nodes by role
         role_counts = {}
         for node_name, role in node_role_map.items():
@@ -195,12 +186,11 @@ class nodeHealthELT(utilityELT):
             top_nodes = top_nodes_info.get('nodes', [])
             if top_nodes:
                 top_node = top_nodes[0]
-                latency_ms = top_node.get('p99_latency', 0) * 1000
                 structured['overview'].append({
                     'Metric': 'Top PLEG Latency',
                     'Node': self.truncate_node_name(top_node.get('node', '')),
                     'Role': top_node.get('role', '').title(),
-                    'Value': f"{latency_ms:.2f}ms",
+                    'Value': f"{top_node.get('p99_latency', 0):.4f}s",
                     'Status': self._get_pleg_status(top_node.get('p99_latency', 0))
                 })
 
@@ -215,7 +205,7 @@ class nodeHealthELT(utilityELT):
 
     def _generate_overview_from_groups(self, node_groups: Dict[str, Any],
                                       structured: Dict[str, Any]):
-        """Generate node health overview from node_groups structure"""
+        """Generate PLEG overview from node_groups structure"""
         role_counts = {}
         total_metrics_collected = 0
 
@@ -246,12 +236,11 @@ class nodeHealthELT(utilityELT):
             # Sort by p99_latency descending
             all_pleg_nodes.sort(key=lambda x: x.get('p99_latency', 0), reverse=True)
             top_node = all_pleg_nodes[0]
-            latency_ms = top_node.get('p99_latency', 0) * 1000
             structured['overview'].append({
                 'Metric': 'Highest PLEG Latency',
                 'Node': self.truncate_node_name(top_node.get('node', '')),
                 'Role': top_node.get('role', '').title(),
-                'Value': f"{latency_ms:.2f}ms",
+                'Value': f"{top_node.get('p99_latency', 0):.4f}s",
                 'Status': self._get_pleg_status(top_node.get('p99_latency', 0))
             })
 
@@ -286,8 +275,8 @@ class nodeHealthELT(utilityELT):
 
         return role
 
-    def summarize_node_health(self, data: Dict[str, Any]) -> str:
-        """Generate node health summary as HTML"""
+    def summarize_pleg_relist(self, data: Dict[str, Any]) -> str:
+        """Generate PLEG relist summary as HTML"""
         try:
             summary_items: List[str] = []
 
@@ -306,7 +295,7 @@ class nodeHealthELT(utilityELT):
 
             # Top PLEG latency info
             for item in overview_data:
-                if item.get('Metric') == 'Top PLEG Latency':
+                if item.get('Metric') in ['Top PLEG Latency', 'Highest PLEG Latency']:
                     node = item.get('Node', 'Unknown')
                     role = item.get('Role', 'Unknown')
                     value = item.get('Value', 'N/A')
@@ -320,7 +309,7 @@ class nodeHealthELT(utilityELT):
                     role = item.get('Role', 'Unknown')
                     nodes = item.get('Nodes', 0)
                     metrics = item.get('Metrics Collected', 0)
-                    summary_items.append(f"<li>{role}: {nodes} nodes, {metrics} health metrics</li>")
+                    summary_items.append(f"<li>{role}: {nodes} nodes, {metrics} metrics</li>")
 
             # Time range
             time_range = data.get('time_range', {})
@@ -332,22 +321,22 @@ class nodeHealthELT(utilityELT):
                         f"<li>Time Range: {time_range.get('start')} to {time_range.get('end')}</li>"
                     )
 
-            # Health interpretation
+            # PLEG thresholds
             summary_items.append("<li><strong>PLEG Latency Thresholds:</strong></li>")
-            summary_items.append("<li style='margin-left: 20px;'>✅ Normal: &lt; 100ms</li>")
-            summary_items.append("<li style='margin-left: 20px;'>⚠️ Warning: 100ms - 1000ms</li>")
-            summary_items.append("<li style='margin-left: 20px;'>🔴 Critical: &gt; 1000ms</li>")
+            summary_items.append("<li style='margin-left: 20px;'>✅ Normal: &lt; 10s</li>")
+            summary_items.append("<li style='margin-left: 20px;'>⚠️ Warning: 10s - 180s (3 minutes)</li>")
+            summary_items.append("<li style='margin-left: 20px;'>🔴 Critical: &gt; 180s (3 minutes)</li>")
 
             return (
-                "<div class=\"node-health-summary\">"
-                "<h4>Node Health Metrics Summary:</h4>"
+                "<div class=\"pleg-relist-summary\">"
+                "<h4>PLEG Relist Latency Summary:</h4>"
                 "<ul>" + "".join(summary_items) + "</ul>"
                 "</div>"
             )
 
         except Exception as e:
-            logger.error(f"Failed to generate node health summary: {e}")
-            return "Node health metrics collected"
+            logger.error(f"Failed to generate PLEG summary: {e}")
+            return "<div class=\"pleg-relist-summary\">PLEG relist metrics collected</div>"
 
     def transform_to_dataframes(self, structured_data: Dict[str, Any]) -> Dict[str, pd.DataFrame]:
         """Transform structured data into pandas DataFrames"""
@@ -366,39 +355,33 @@ class nodeHealthELT(utilityELT):
                         dataframes[key] = df
 
         except Exception as e:
-            logger.error(f"Failed to transform node health data to DataFrames: {e}")
+            logger.error(f"Failed to transform PLEG data to DataFrames: {e}")
 
         return dataframes
 
     def generate_html_tables(self, dataframes: Dict[str, pd.DataFrame]) -> Dict[str, str]:
-        """Generate HTML tables from DataFrames grouped by metric and role"""
+        """Generate HTML tables from DataFrames grouped by role"""
         html_tables = {}
-
-        # Define metric groups
-        metric_groups = {
-            'PLEG Relist Duration (P99)': 'p99_kubelet_pleg_relist_duration'
-        }
 
         try:
             # Overview table first
             if 'overview' in dataframes and not dataframes['overview'].empty:
                 html_tables['overview'] = self.create_html_table(
                     dataframes['overview'],
-                    'Node Health Overview'
+                    'PLEG Relist Latency Overview'
                 )
 
-            # Generate tables for each metric group and role
-            for metric_name, metric_prefix in metric_groups.items():
-                for role in ['controlplane', 'infra', 'worker', 'workload']:
-                    table_key = f'{metric_prefix}_{role}'
-                    if table_key in dataframes and not dataframes[table_key].empty:
-                        display_name = f"{metric_name} - {role.title()} Nodes"
-                        html_tables[table_key] = self.create_html_table(
-                            dataframes[table_key],
-                            display_name
-                        )
+            # Generate tables for each role
+            for role in ['controlplane', 'infra', 'worker', 'workload']:
+                table_key = f'p99_kubelet_pleg_relist_duration_{role}'
+                if table_key in dataframes and not dataframes[table_key].empty:
+                    display_name = f"PLEG Relist Duration (P99) - {role.title()} Nodes"
+                    html_tables[table_key] = self.create_html_table(
+                        dataframes[table_key],
+                        display_name
+                    )
 
         except Exception as e:
-            logger.error(f"Failed to generate HTML tables for node health: {e}")
+            logger.error(f"Failed to generate HTML tables for PLEG: {e}")
 
         return html_tables

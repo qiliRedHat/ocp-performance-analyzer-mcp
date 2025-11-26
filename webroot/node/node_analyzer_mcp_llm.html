@@ -607,8 +607,10 @@
                     Infra Nodes</button>
                 <button class="action-button" onclick="sendQuickMessage('Show me workload node resource usage')">💼
                     Workload Nodes</button>
-                <button class="action-button" onclick="sendQuickMessage('Show me PLEG latency for all node groups')">⏱️
+                <button class="action-button" onclick="sendQuickMessage('Show me node PLEG latency for all node groups')">⏱️
                     PLEG Health Check</button>
+                <button class="action-button" onclick="sendQuickMessage('Show me kubelet runtime operations errors for all node groups')">⚠️
+                    Kubelet Operations Runtime Errors</button>
                 <button class="action-button" onclick="sendQuickMessage('Analyze node CPU usage and identify top consumers')">🔥
                     CPU Analysis</button>
                 <button class="action-button" onclick="sendQuickMessage('Analyze node memory usage and identify pressure')">💾
@@ -616,7 +618,7 @@
                 <button class="action-button" onclick="sendQuickMessage('Show me cgroup resource usage across nodes')">📦
                     Cgroup Analysis</button>
                 <button class="action-button"
-                    onclick="sendQuickMessage('Generate comprehensive node health report with resource usage and PLEG latency')">📋
+                    onclick="sendQuickMessage('Generate comprehensive node health report with resource usage using get_ocp_node_usage, PLEG latency using get_ocp_node_pleg_latency, and Kubelet Runtime Operations Errors using get_ocp_node_runtime_errors')">📋
                     Full Node Report</button>
                 <button class="action-button" onclick="toggleSystemPromptModal()">⚙️ Configure AI Behavior</button>
             </div>
@@ -645,12 +647,14 @@
                 <div class="messages" id="messages">
                     <div class="welcome-message">
                         <h3>Welcome to OpenShift Node Analyzer AI Assistant</h3>
-                        <p>I can help you analyze node performance, monitor resource usage, check PLEG latency, and provide
+                        <p>I can help you analyze node performance, monitor resource usage, check PLEG latency, track Kubelet Runtime Operations Errors, and provide
                             insights about your OpenShift cluster nodes using advanced AI and comprehensive monitoring tools.</p>
                         <div class="suggestions">
                             <span class="suggestion" onclick="sendQuickMessage('Show all node groups usage')">All Nodes</span>
                             <span class="suggestion"
-                                onclick="sendQuickMessage('Check PLEG latency on control plane')">PLEG Check</span>
+                                onclick="sendQuickMessage('Check PLEG latency using get_ocp_node_pleg_latency')">PLEG Check</span>
+                            <span class="suggestion"
+                                onclick="sendQuickMessage('Check kubelet runtime operations errors using get_ocp_node_runtime_errors')">Kubelet Operations Runtime Errors</span>
                             <span class="suggestion" onclick="sendQuickMessage('Show CPU usage by node')">CPU Usage</span>
                             <span class="suggestion"
                                 onclick="sendQuickMessage('Analyze memory pressure')">Memory Pressure</span>
@@ -668,7 +672,7 @@
 
                 <div class="input-container">
                     <textarea class="message-input" id="messageInput"
-                        placeholder="Ask about node performance, CPU/memory usage, PLEG latency, or request comprehensive node analysis reports..."
+                        placeholder="Ask about node performance, CPU/memory usage, PLEG latency, Kubelet Runtime Operations Errors, or request comprehensive node analysis reports..."
                         rows="1"></textarea>
                     <button class="send-button" id="sendButton" onclick="sendMessage()">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -701,7 +705,31 @@
         </div>
     </div>
 
+    <!-- Marked.js for markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+
     <script>
+        // Configure marked options
+        marked.setOptions({
+            breaks: true,
+            gfm: true,
+            headerIds: false,
+            mangle: false
+        });
+
+        // Function to parse markdown to HTML
+        function parseMarkdown(text) {
+            if (!text || typeof text !== 'string') return text;
+
+            // Check if content already contains HTML tags (don't double-parse)
+            if (text.includes('<div') || text.includes('<table')) {
+                return text;
+            }
+
+            // Parse markdown to HTML
+            return marked.parse(text);
+        }
+
         function decodeUnicodeEscapes(text) {
             try {
                 if (!text || typeof text !== 'string') return text;
@@ -928,10 +956,12 @@
 
                 if (aiAnalysis.trim()) {
                     let formattedAnalysis = aiAnalysis;
-                    formattedAnalysis = formattedAnalysis.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-                    formattedAnalysis = formattedAnalysis.replace(/\*(.*?)\*/g, '<em>$1</em>');
-                    formattedAnalysis = formattedAnalysis.replace(/\n/g, '<br>');
+
+                    // Fix mojibake first
                     formattedAnalysis = fixMojibake(formattedAnalysis);
+
+                    // Parse markdown to HTML (handles headings, bold, italic, lists, etc.)
+                    formattedAnalysis = parseMarkdown(formattedAnalysis);
 
                     if (hasToolResults) {
                         displayContent += `<div class="ai-analysis-section">
@@ -954,6 +984,12 @@
 
                 const messageDiv = document.createElement('div');
                 messageDiv.className = `message ${type}`;
+
+                // Parse markdown for AI messages
+                if (type === 'ai') {
+                    content = parseMarkdown(content);
+                }
+
                 messageDiv.innerHTML = content;
 
                 this.messagesContainer.appendChild(messageDiv);
@@ -982,7 +1018,7 @@
                 this.messagesContainer.innerHTML = `
                     <div class="welcome-message">
                         <h3>Chat Cleared</h3>
-                        <p>How can I help you analyze your OpenShift nodes today?</p>
+                        <p>How can I help you analyze your OpenShift nodes today? I can check resource usage, PLEG latency, Kubelet Runtime Operations Errors, and more.</p>
                     </div>
                 `;
             }

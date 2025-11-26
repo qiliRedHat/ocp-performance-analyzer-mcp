@@ -406,6 +406,7 @@ class nodeUsageCollector:
                 )
                 cgroup_cpu = await self._collect_cgroup_cpu_usage(prom, nodes, start_str, end_str, node_name_map)
                 cgroup_rss = await self._collect_cgroup_rss_usage(prom, nodes, start_str, end_str, node_name_map)
+                runtime_errors = await self._collect_kubelet_runtime_operations_errors_rate(prom, nodes, start_str, end_str, node_name_map)
             
             # Build node details with role information
             node_details = []
@@ -468,7 +469,8 @@ class nodeUsageCollector:
                     'memory_used': memory_used,
                     'memory_cache_buffer': memory_cache,
                     'cgroup_cpu_usage': cgroup_cpu,
-                    'cgroup_rss_usage': cgroup_rss
+                    'cgroup_rss_usage': cgroup_rss,
+                    'kubelet_runtime_operations_errors_rate': runtime_errors
                 }
             }
             
@@ -880,9 +882,90 @@ class nodeUsageCollector:
                 'description': metric_config.get('description', 'Cgroup RSS usage per node'),
                 'nodes': nodes_result
             }
-            
+
         except Exception as e:
             self.logger.error(f"Error collecting cgroup RSS usage: {e}", exc_info=True)
+            return {'status': 'error', 'error': str(e)}
+
+    async def _collect_kubelet_runtime_operations_errors_rate(self, prom: PrometheusBaseQuery,
+                                                               nodes: List[str],
+                                                               start: str, end: str,
+                                                               node_name_map: Dict[str, str],
+                                                               step: str = '15s') -> Dict[str, Any]:
+        """Collect kubelet runtime operations error rate by operation type for specified nodes"""
+        try:
+            metric_config = self.config.get_metric_by_name('kubelet_runtime_operations_errors_rate')
+            if not metric_config:
+                self.logger.error("Metric 'kubelet_runtime_operations_errors_rate' not found in config")
+                return {'status': 'error', 'error': 'Metric configuration not found'}
+
+            node_pattern = mcpToolsUtility.get_node_pattern(nodes)
+            query = f'sum(rate(kubelet_runtime_operations_errors_total{{node=~"{node_pattern}"}}[5m])) by (node, operation_type)'
+
+            self.logger.debug(f"Querying kubelet runtime operations errors: {query}")
+
+            result = await self._query_range_wrap(prom, query, start, end, step)
+
+            if result['status'] != 'success':
+                return {'status': 'error', 'error': result.get('error', 'Query failed')}
+
+            raw_results = result.get('data', {}).get('result', [])
+            self.logger.info(f"Got {len(raw_results)} runtime operations error series")
+
+            # Group by node to collect time series per operation type
+            node_time_series = {}
+            for item in raw_results:
+                node = item.get('metric', {}).get('node', 'unknown')
+                operation_type = item.get('metric', {}).get('operation_type', 'unknown')
+                values = item.get('values', [])
+
+                # Normalize to full node name
+                full_name = self._normalize_instance_to_full_name(node, node_name_map)
+
+                if full_name not in node_time_series:
+                    node_time_series[full_name] = {'operation_types': {}}
+
+                # Extract numeric values using utility function
+                operation_values = mcpToolsUtility.extract_numeric_values(values)
+
+                if operation_values:
+                    node_time_series[full_name]['operation_types'][operation_type] = operation_values
+
+            # Calculate per-node statistics
+            nodes_result = {}
+            for full_name, data in node_time_series.items():
+                node_data = {'operation_types': {}, 'unit': 'errors/sec'}
+
+                # Calculate stats for each operation type using utility function
+                all_operation_values = []
+                for operation_type, operation_values in data['operation_types'].items():
+                    stats = mcpToolsUtility.calculate_time_series_stats(operation_values)
+                    node_data['operation_types'][operation_type] = {
+                        **stats,
+                        'unit': 'errors/sec'
+                    }
+                    all_operation_values.extend(operation_values)
+
+                # Calculate total error rate across all operation types
+                if all_operation_values:
+                    total_stats = mcpToolsUtility.calculate_time_series_stats(all_operation_values)
+                    node_data['total'] = {
+                        **total_stats,
+                        'unit': 'errors/sec'
+                    }
+
+                nodes_result[full_name] = node_data
+                self.logger.info(f"Collected runtime errors for {full_name}: {len(data['operation_types'])} operation types")
+
+            return {
+                'status': 'success',
+                'metric': 'kubelet_runtime_operations_errors_rate',
+                'description': metric_config.get('description', 'Rate of kubelet runtime operation errors by operation type'),
+                'nodes': nodes_result
+            }
+
+        except Exception as e:
+            self.logger.error(f"Error collecting kubelet runtime operations errors: {e}", exc_info=True)
             return {'status': 'error', 'error': str(e)}
 
 

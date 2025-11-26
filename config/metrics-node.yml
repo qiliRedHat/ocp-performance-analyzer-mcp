@@ -43,3 +43,10 @@ metrics:
     description: "99th-percentile PLEG relist latency in seconds"
     category: node_health
 
+  - name: kubelet_runtime_operations_errors_rate
+    title: "kubelet_runtime_operations_errors_rate"
+    expr: 'sum(rate(kubelet_runtime_operations_errors_total{node=~"$node_name"}[5m])) by (node, operation_type)'
+    unit: errors/sec
+    description: "Rate of kubelet runtime operation errors by operation type"
+    category: node_health
+

@@ -138,14 +138,24 @@ class GenericELT(utilityELT):
             logger.warning(f"Could not import node_usage handler: {e}")
 
         try:
-            from ..node.analyzer_elt_node_health import nodeHealthELT
+            from ..node.analyzer_elt_node_pleg_relist import nodePlegRelistELT
             register_metric_handler(
-                'node_health',
-                nodeHealthELT,
-                self._is_node_health
+                'node_pleg_latency',
+                nodePlegRelistELT,
+                self._is_node_pleg_latency
             )
         except ImportError as e:
-            logger.warning(f"Could not import node_health handler: {e}")
+            logger.warning(f"Could not import node_pleg_latency handler: {e}")
+
+        try:
+            from ..node.analyzer_elt_node_kubelet_runtime_operations_errors import nodeKubeletRuntimeOperationsErrorsELT
+            register_metric_handler(
+                'node_kubelet_runtime_operations_errors',
+                nodeKubeletRuntimeOperationsErrorsELT,
+                self._is_node_kubelet_runtime_operations_errors
+            )
+        except ImportError as e:
+            logger.warning(f"Could not import node_kubelet_runtime_operations_errors handler: {e}")
 
         try:
             from ..pods.analyzer_elt_pods_usage import podsUsageELT
@@ -444,15 +454,15 @@ class GenericELT(utilityELT):
         return False
 
     @staticmethod
-    def _is_node_health(data: Dict[str, Any]) -> bool:
-        """Identify node health data (PLEG metrics)"""
-        if 'category' in data and data.get('category') == 'node_health':
+    def _is_node_pleg_latency(data: Dict[str, Any]) -> bool:
+        """Identify node PLEG latency data"""
+        if 'category' in data and data.get('category') == 'node_pleg_latency':
             return True
 
         # Check nested structure
         if 'data' in data and isinstance(data.get('data'), dict):
             inner = data['data']
-            if 'category' in inner and inner.get('category') == 'node_health':
+            if 'category' in inner and inner.get('category') == 'node_pleg_latency':
                 return True
             # Also check for PLEG metric presence
             if 'node_groups' in inner:
@@ -460,6 +470,27 @@ class GenericELT(utilityELT):
                     if isinstance(group_data, dict):
                         metrics = group_data.get('metrics', {})
                         if 'p99_kubelet_pleg_relist_duration' in metrics:
+                            return True
+
+        return False
+
+    @staticmethod
+    def _is_node_kubelet_runtime_operations_errors(data: Dict[str, Any]) -> bool:
+        """Identify node kubelet runtime operations errors data"""
+        if 'category' in data and data.get('category') == 'node_kubelet_runtime_operations_errors':
+            return True
+
+        # Check nested structure
+        if 'data' in data and isinstance(data.get('data'), dict):
+            inner = data['data']
+            if 'category' in inner and inner.get('category') == 'node_kubelet_runtime_operations_errors':
+                return True
+            # Also check for runtime errors metric presence
+            if 'node_groups' in inner:
+                for group_data in inner.get('node_groups', {}).values():
+                    if isinstance(group_data, dict):
+                        metrics = group_data.get('metrics', {})
+                        if 'kubelet_runtime_operations_errors_rate' in metrics:
                             return True
 
         return False
@@ -1123,9 +1154,12 @@ class GenericELT(utilityELT):
             elif data_type == 'node_usage':
                 structured_data = handler.extract_node_usage(actual_data) if hasattr(handler, 'extract_node_usage') else {}
                 summary_method = 'summarize_node_usage'
-            elif data_type == 'node_health':
-                structured_data = handler.extract_node_health(actual_data) if hasattr(handler, 'extract_node_health') else {}
-                summary_method = 'summarize_node_health'
+            elif data_type == 'node_pleg_latency':
+                structured_data = handler.extract_pleg_relist(actual_data) if hasattr(handler, 'extract_pleg_relist') else {}
+                summary_method = 'summarize_pleg_relist'
+            elif data_type == 'node_kubelet_runtime_operations_errors':
+                structured_data = handler.extract_kubelet_runtime_operations_errors(actual_data) if hasattr(handler, 'extract_kubelet_runtime_operations_errors') else {}
+                summary_method = 'summarize_kubelet_runtime_operations_errors'
             elif data_type == 'pods_usage':
                 structured_data = handler.extract_pods_usage(actual_data) if hasattr(handler, 'extract_pods_usage') else {}
                 summary_method = 'summarize_pods_usage'

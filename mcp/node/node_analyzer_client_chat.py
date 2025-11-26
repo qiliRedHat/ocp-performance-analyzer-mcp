@@ -104,7 +104,13 @@ class MCPTool(BaseTool):
             wrapped_params = {"request": params} if params else {}
 
             result = await self.mcp_client.call_tool(self.name, wrapped_params)
-            return json.dumps(result, indent=2)
+
+            # If result is already a string (HTML or formatted text), return directly
+            # Otherwise, JSON dump it for proper serialization
+            if isinstance(result, str):
+                return result
+            else:
+                return json.dumps(result, indent=2)
         except Exception as e:
             logger.error(f"Error calling MCP tool {self.name}: {e}")
             return f"Error: {str(e)}"
@@ -384,7 +390,8 @@ class ChatBot:
 - Node health monitoring and diagnostics
 - OpenShift cluster node troubleshooting and performance optimization
 - Container runtime and kubelet performance analysis
-- Pod Lifecycle Event Generator (PLEG) metrics and diagnostics
+- Pod Lifecycle Event Generator (PLEG) relist latency metrics
+- Kubelet runtime operations error rates
 - CPU, memory, and cgroup resource management
 - Node resource pressure and eviction scenarios
 - Be able to explain metrics and typical scenarios that use these metrics
@@ -394,19 +401,31 @@ When analyzing node data:
 2. Provide actionable insights and specific recommendations
 3. Explain technical findings in clear, structured responses
 4. Use the available MCP tools to gather comprehensive analysis
-5. Correlate multiple metrics to identify root causes from CPU, memory, disk I/O, network I/O, and PLEG
+5. Correlate multiple metrics to identify root causes from CPU, memory, disk I/O, network I/O, PLEG latency, and kubelet runtime operations errors
 6. Prioritize critical issues that affect node stability and pod scheduling
 
 Always structure your responses with:
 - Explain metrics and typical scenarios that use these metrics
 - Executive summary of findings
 - Detailed technical analysis
-- Specific recommendations with priority levels
+- Specific recommendations with priority levels (use bullet points, NOT markdown tables)
 - Next steps for investigation or remediation, always provide suggested tuning methods, highlight with bold and green words
 - Highlight critical issues or values higher than threshold via red characters/words, using bold green or bold orange, or bold purple and other colors to distinguish different info/warning/status
 - If no specific threshold value is provided, use industry standards
 - Make the analysis result readable and clear
-- Don't create tables
+
+**IMPORTANT FORMATTING RULES:**
+- Use markdown formatting (the UI converts markdown to HTML)
+- Use ### for main section headings, #### for subsections
+- Use bullet lists (- or *) with **bold** for emphasis
+- NEVER use markdown tables (| column | format) - they look bad in the UI
+- Format recommendations as markdown bullet lists with emojis for priority:
+  ### Recommendations
+  - 🔴 **High Priority**: Critical issue requiring immediate action
+  - 🟠 **Medium Priority**: Important improvement to implement soon
+  - 🟢 **Low Priority**: Optional enhancement for consideration
+- Use **bold** for emphasis and `code blocks` for commands or values
+- Use > for important callouts or warnings
 
 Be thorough but concise, and always explain the business impact of technical issues."""
 
