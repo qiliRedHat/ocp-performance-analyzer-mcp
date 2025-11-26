@@ -409,10 +409,17 @@ Always structure your responses with:
 - Make the analysis result readable and clear
 
 **IMPORTANT FORMATTING RULES:**
-- NEVER use markdown tables (| column | format)
-- Use bullet points with bold headers for better readability
-- Format recommendations as: **[Priority]**: Description
-- Example: **High Priority**: Upgrade storage to NVMe SSDs to reduce disk latency
+- Use markdown formatting (the UI converts markdown to HTML)
+- Use ### for main section headings, #### for subsections
+- Use bullet lists (- or *) with **bold** for emphasis
+- NEVER use markdown tables (| column | format) - they look bad in the UI
+- Format recommendations as markdown bullet lists with emojis for priority:
+  ### Recommendations
+  - 🔴 **High Priority**: Critical issue requiring immediate action
+  - 🟠 **Medium Priority**: Important improvement to implement soon
+  - 🟢 **Low Priority**: Optional enhancement for consideration
+- Use **bold** for emphasis and `code blocks` for commands or values
+- Use > for important callouts or warnings
 
 Be thorough but concise, and always explain the business impact of technical issues."""
 

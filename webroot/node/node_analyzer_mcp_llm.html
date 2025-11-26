@@ -705,7 +705,31 @@
         </div>
     </div>
 
+    <!-- Marked.js for markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+
     <script>
+        // Configure marked options
+        marked.setOptions({
+            breaks: true,
+            gfm: true,
+            headerIds: false,
+            mangle: false
+        });
+
+        // Function to parse markdown to HTML
+        function parseMarkdown(text) {
+            if (!text || typeof text !== 'string') return text;
+
+            // Check if content already contains HTML tags (don't double-parse)
+            if (text.includes('<div') || text.includes('<table')) {
+                return text;
+            }
+
+            // Parse markdown to HTML
+            return marked.parse(text);
+        }
+
         function decodeUnicodeEscapes(text) {
             try {
                 if (!text || typeof text !== 'string') return text;
@@ -932,10 +956,12 @@
 
                 if (aiAnalysis.trim()) {
                     let formattedAnalysis = aiAnalysis;
-                    formattedAnalysis = formattedAnalysis.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-                    formattedAnalysis = formattedAnalysis.replace(/\*(.*?)\*/g, '<em>$1</em>');
-                    formattedAnalysis = formattedAnalysis.replace(/\n/g, '<br>');
+
+                    // Fix mojibake first
                     formattedAnalysis = fixMojibake(formattedAnalysis);
+
+                    // Parse markdown to HTML (handles headings, bold, italic, lists, etc.)
+                    formattedAnalysis = parseMarkdown(formattedAnalysis);
 
                     if (hasToolResults) {
                         displayContent += `<div class="ai-analysis-section">
@@ -958,6 +984,12 @@
 
                 const messageDiv = document.createElement('div');
                 messageDiv.className = `message ${type}`;
+
+                // Parse markdown for AI messages
+                if (type === 'ai') {
+                    content = parseMarkdown(content);
+                }
+
                 messageDiv.innerHTML = content;
 
                 this.messagesContainer.appendChild(messageDiv);
