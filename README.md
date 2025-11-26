@@ -23,11 +23,12 @@ A comprehensive, AI-powered performance analysis and monitoring platform for Ope
 
 ## Overview
 
-The OCP Performance Analyzer MCP is a multi-component platform designed to monitor and analyze OpenShift/Kubernetes cluster performance across three main areas:
+The OCP Performance Analyzer MCP is a multi-component platform designed to monitor and analyze OpenShift/Kubernetes cluster performance across four main areas:
 
 1. **ETCD Analyzer** - Comprehensive etcd cluster performance monitoring
 2. **Network Analyzer** - Network stack performance analysis (L1, sockets, netstat, I/O)
 3. **OVN-Kubernetes Analyzer** - OVN-Kubernetes networking component analysis
+4. **Node Analyzer** - Node health and performance monitoring (PLEG, runtime operations, resource usage)
 
 Each component includes:
 - MCP servers exposing performance analysis tools
@@ -42,17 +43,17 @@ Each component includes:
 ### High-Level Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Client Layer                              │
+┌──────────────────────────────────────────────────────────┐
+│                    Client Layer                          │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
-│  │   Web UI     │  │   CLI Tools   │  │   REST API    │    │
+│  │   Web UI     │  │   CLI Tools  │  │   REST API   │    │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘    │
-└─────────┼─────────────────┼─────────────────┼─────────────┘
+└─────────┼─────────────────┼─────────────────┼────────────┘
           │                 │                 │
           └─────────────────┼─────────────────┘
                             │
 ┌───────────────────────────┼───────────────────────────────┐
-│                    AI Agent Layer (Port 8080)              │
+│                    AI Agent Layer (Port 8080)             │
 │  ┌─────────────────────────────────────────────────────┐  │
 │  │  LangGraph Agents: Chat, Report, Storage            │  │
 │  │  • Streaming responses                              │  │
@@ -61,41 +62,41 @@ Each component includes:
 │  └─────────────────────────────────────────────────────┘  │
 └───────────────────────────┬───────────────────────────────┘
                             │ MCP Protocol
-┌───────────────────────────┼───────────────────────────────┐
-│                    MCP Server Layer (Port 8000)            │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
-│  │ ETCD Server  │  │ Network Server│  │ OVNK Server   │  │
-│  │ 15+ tools    │  │ 10+ tools     │  │ 8+ tools      │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  │
-└─────────┼─────────────────┼─────────────────┼─────────────┘
-          │                 │                 │
-┌─────────┼─────────────────┼─────────────────┼─────────────┐
-│          │                 │                 │             │
-│  ┌───────▼───────┐  ┌───────▼───────┐  ┌───────▼───────┐ │
-│  │   Tools/      │  │   Tools/       │  │   Tools/      │ │
-│  │   Collectors  │  │   Collectors   │  │   Collectors  │ │
-│  └───────┬───────┘  └───────┬───────┘  └───────┬───────┘ │
-│          │                 │                 │             │
-│  ┌───────▼───────┐  ┌───────▼───────┐  ┌───────▼───────┐ │
-│  │   Analysis    │  │   Analysis    │  │   Analysis    │ │
-│  │   Modules     │  │   Modules     │  │   Modules     │ │
-│  └───────┬───────┘  └───────┬───────┘  └───────┬───────┘ │
-│          │                 │                 │             │
-│  ┌───────▼───────┐  ┌───────▼───────┐  ┌───────▼───────┐ │
-│  │   ELT         │  │   ELT          │  │   ELT         │ │
-│  │   Pipeline    │  │   Pipeline     │  │   Pipeline    │ │
-│  └───────┬───────┘  └───────┬───────┘  └───────┬───────┘ │
-│          │                 │                 │             │
-│  ┌───────▼─────────────────▼─────────────────▼───────┐   │
-│  │              Storage Layer (DuckDB)                 │   │
-│  └─────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-          │
-          ▼
+┌───────────────────────────┼─────────────────────────────────────────────────┐
+│                    MCP Server Layer (Port 8000)                             │
+│  ┌──────────────┐  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐  │
+│  │ ETCD Server  │  │ Network Server│  │ OVNK Server   │  │ Node Server   │  │
+│  │ 15+ tools    │  │ 10+ tools     │  │ 8+ tools      │  │ 5+ tools      │  │
+│  └───────┬──────┘  └────────┬──────┘  └────────┬──────┘  └────────┬──────┘  │
+└──────────┼──────────────────┼──────────────────┼──────────────────┼─────────┘
+           │                  │                  │                  │
+┌──────────┼──────────────────┼──────────────────┼──────────────────┼──────────┐
+│          │                  │                  │                  │          │
+│  ┌───────▼───────┐  ┌───────▼───────┐  ┌───────▼───────┐  ┌───────▼───────┐  │
+│  │   Tools/      │  │   Tools/      │  │   Tools/      │  │   Tools/      │  │
+│  │   Collectors  │  │   Collectors  │  │   Collectors  │  │   Collectors  │  │
+│  └───────┬───────┘  └───────┬───────┘  └───────┬───────┘  └───────┬───────┘  │
+│          │                  │                  │                  │          │
+│  ┌───────▼───────┐  ┌───────▼───────┐  ┌───────▼───────┐  ┌───────▼───────┐  │
+│  │   Analysis    │  │   Analysis    │  │   Analysis    │  │   Analysis    │  │
+│  │   Modules     │  │   Modules     │  │   Modules     │  │   Modules     │  │
+│  └───────┬───────┘  └───────┬───────┘  └───────┬───────┘  └───────┬───────┘  │
+│          │                  │                  │                  │          │
+│  ┌───────▼───────┐  ┌───────▼───────┐  ┌───────▼───────┐  ┌───────▼───────┐  │
+│  │   ELT         │  │   ELT         │  │   ELT         │  │   ELT         │  │
+│  │   Pipeline    │  │   Pipeline    │  │   Pipeline    │  │   Pipeline    │  │
+│  └───────┬───────┘  └───────┬───────┘  └───────┬───────┘  └───────┬───────┘  │
+│          │                  │                  │                  │          │
+│  ┌───────▼──────────────────▼──────────────────▼──────────────────▼───────┐  │
+│  │              Storage Layer (DuckDB)                                    │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
 ┌─────────────────────────────────────────────────────────────┐
-│         OpenShift/Kubernetes Cluster Infrastructure        │
-│  • ETCD Cluster    • Prometheus    • Kubernetes API        │
-│  • Master Nodes    • OVN-Kubernetes • Network Components   │
+│         OpenShift/Kubernetes Cluster Infrastructure         │
+│  • ETCD Cluster    • Prometheus    • Kubernetes API         │
+│  • Master Nodes    • OVN-Kubernetes • Network Components    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -144,6 +145,15 @@ Each analyzer (etcd, network, ovnk) follows a consistent architecture:
 - **OVN-Specific Metrics**: Northbound/Southbound database sizes, sync performance
 - **CNI Analysis**: Kubelet and CNI performance metrics
 - **OVS Monitoring**: Open vSwitch daemon and flow table statistics
+
+### Node Analyzer Features
+
+- **5+ Analysis Tools**: Node resource usage, PLEG latency, kubelet runtime operations errors, cluster info, health status
+- **PLEG Monitoring**: Pod Lifecycle Event Generator relist latency metrics with configurable thresholds
+- **Runtime Error Tracking**: Kubelet runtime operations error rates by operation type
+- **Resource Metrics**: CPU, memory, and cgroup usage across node groups (controlplane, worker, infra, workload)
+- **Node Group Support**: Metrics grouped by node role for targeted analysis
+- **Web UI**: Markdown-rendered chat interface with color-coded insights and recommendations
 
 ### Shared Features
 
@@ -200,7 +210,9 @@ ocp-performance-analyzer-mcp/
 │   │   ├── analyzer_elt_network_netstat4*.py
 │   │   └── analyzer_elt_network_socket4*.py
 │   ├── node/                    # Node ELT modules
-│   │   └── analyzer_elt_node_usage.py
+│   │   ├── analyzer_elt_node_usage.py
+│   │   ├── analyzer_elt_node_pleg_relist.py
+│   │   └── analyzer_elt_node_kubelet_runtime_operations_errors.py
 │   ├── ocp/                     # OCP cluster ELT modules
 │   │   ├── analyzer_elt_cluster_alert.py
 │   │   ├── analyzer_elt_cluster_apistats.py
@@ -239,6 +251,19 @@ ocp-performance-analyzer-mcp/
 │   │   ├── exports/
 │   │   ├── logs/
 │   │   └── storage/
+│   ├── node/                    # Node analyzer MCP server
+│   │   ├── node_analyzer_mcp_server.py      # Main MCP server
+│   │   ├── node_analyzer_client_chat.py     # Chat client (FastAPI)
+│   │   ├── mcp_tools/                       # Modular MCP tool definitions
+│   │   │   ├── __init__.py
+│   │   │   ├── models.py                    # Pydantic models
+│   │   │   ├── health_check.py              # Health status tool
+│   │   │   ├── cluster_info.py              # Cluster info tool
+│   │   │   ├── node_usage.py                # Node usage tool
+│   │   │   ├── node_pleg_relist.py          # PLEG latency tool
+│   │   │   └── node_kubelet_runtime_operations_errors.py  # Runtime errors tool
+│   │   ├── exports/
+│   │   └── logs/
 │   └── ovnk/                    # OVN-Kubernetes analyzer MCP server
 │       ├── ovnk_analyzer_mcp_server.py
 │       ├── ovnk_analyzer_mcp_client_chat.py
@@ -282,7 +307,9 @@ ocp-performance-analyzer-mcp/
 │   │   ├── network_socket4mem.py
 │   │   └── network_socket4softnet.py
 │   ├── node/                    # Node collectors
-│   │   └── node_usage.py
+│   │   ├── node_usage.py
+│   │   ├── node_pleg_relist.py
+│   │   └── node_kubelet_runtime_operations_errors.py
 │   ├── ocp/                     # OCP collectors
 │   │   ├── cluster_info.py
 │   │   ├── cluster_apistats.py
@@ -305,6 +332,8 @@ ocp-performance-analyzer-mcp/
 │   │   └── etcd_analyzer_mcp_llm.html
 │   ├── net/                     # Network web UI
 │   │   └── network_analyzer_mcp_llm.html
+│   ├── node/                    # Node web UI
+│   │   └── node_analyzer_mcp_llm.html
 │   └── ovnk/                    # OVN-Kubernetes web UI
 │       └── ovnk_analyzer_mcp_llm.html
 │
@@ -440,6 +469,21 @@ python ovnk_analyzer_mcp_server.py
 python ovnk_analyzer_mcp_client_chat.py
 ```
 
+### Node Analyzer
+
+```bash
+cd mcp/node
+
+# Start MCP server (Port 8004)
+python node_analyzer_mcp_server.py
+
+# Start chat client (Port 8084) in another terminal
+python node_analyzer_client_chat.py
+
+# Access web UI
+open http://localhost:8084/ui
+```
+
 ## Components
 
 ### 1. MCP Servers
@@ -489,13 +533,39 @@ Each analyzer exposes an MCP server with specialized tools:
 - `query_ovnk_latency_metrics` - Network latency metrics
 - `query_kube_api_metrics` - Kubernetes API metrics
 
+#### Node MCP Server (`mcp/node/node_analyzer_mcp_server.py`)
+
+**Tools:**
+- `get_server_health` - Server health check and collector initialization status
+- `get_ocp_cluster_info` - Cluster information and node inventory
+- `get_ocp_node_usage` - Node resource usage (CPU, memory, cgroup) by node group
+- `get_ocp_node_pleg_latency` - PLEG relist latency metrics with thresholds
+  - Healthy: < 1s
+  - Warning: 1-10s
+  - Critical: > 10s (default), configurable to 3 minutes
+- `get_ocp_node_runtime_errors` - Kubelet runtime operations error rates
+  - Healthy: < 0.01 errors/sec
+  - Warning: 0.01-0.1 errors/sec
+  - Critical: 0.1-1 errors/sec
+  - Severe: > 1 error/sec
+
+**Features:**
+- Modular tool architecture in `mcp_tools/` directory
+- Node group support (controlplane, worker, infra, workload)
+- Comprehensive health summary with node-level metrics
+- Markdown-based chat UI with syntax highlighting
+- Real-time streaming responses
+
 ### 2. Tools/Collectors
 
 Specialized collectors organized by category:
 
 - **ETCD**: Cluster status, general info, WAL fsync, backend commit, compact/defrag
 - **Network**: I/O, L1, sockets (TCP/UDP/IP/mem/softnet), netstat (TCP/UDP)
-- **Node**: CPU, memory, cgroup usage
+- **Node**: CPU, memory, cgroup usage, PLEG relist latency, kubelet runtime operations errors
+  - `nodeUsageCollector` - Node resource metrics (CPU, memory, cgroup)
+  - `plegRelistCollector` - Pod Lifecycle Event Generator latency metrics
+  - `kubeletRuntimeOperationsErrorsCollector` - Runtime operation error rates by type
 - **OCP**: Cluster info, API stats, alerts
 - **OVNK**: OVN database, kubelet CNI, latency, OVS usage
 - **Pods**: Pod and container metrics
